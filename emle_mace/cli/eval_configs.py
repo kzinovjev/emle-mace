@@ -1,10 +1,9 @@
 ###########################################################################################
 # Evaluation script for EnergyEMLEMACE models
 #
-# Extends mace's eval_configs with --return_emle, which adds per-atom EMLE properties
-# (valence_widths/s, core_charges/q_core, charges/q, atomic_dipoles/mu) to the output
-# XYZ file.  All standard mace flags (--return_contributions, --return_descriptors, etc.)
-# are also supported via delegation to mace.cli.eval_configs.get_model_output.
+# Runs inference and writes per-atom EMLE properties (valence_widths/s,
+# core_charges/q_core, charges/q, atomic_dipoles/mu) alongside energy and forces
+# to the output XYZ file.
 ###########################################################################################
 
 import argparse
@@ -60,15 +59,6 @@ def parse_args() -> argparse.Namespace:
         default=False,
     )
     parser.add_argument(
-        "--return_emle",
-        help=(
-            "return EMLE per-atom properties: valence_widths (s), core_charges (q_core), "
-            "charges (q), atomic_dipoles (mu)"
-        ),
-        action="store_true",
-        default=False,
-    )
-    parser.add_argument(
         "--info_prefix",
         help="prefix for energy, forces, stress and EMLE output keys",
         type=str,
@@ -103,16 +93,6 @@ def run(args: argparse.Namespace) -> None:
 
     for param in model.parameters():
         param.requires_grad = False
-
-    # Detect EnergyEMLEMACE: handles both the uncompiled class and compiled
-    # (RecursiveScriptModule) variants whose original_name is "EnergyEMLEMACE".
-    model_class_name = getattr(model, "original_name", type(model).__name__)
-    is_emle_model = isinstance(model, EnergyEMLEMACE) or model_class_name == "EnergyEMLEMACE"
-    if args.return_emle and not is_emle_model:
-        raise ValueError(
-            f"--return_emle requires an EnergyEMLEMACE model, "
-            f"but loaded model is {model_class_name}"
-        )
 
     # Load configurations
     atoms_list = ase.io.read(args.configs, index=":")
@@ -154,8 +134,6 @@ def run(args: argparse.Namespace) -> None:
     stresses_list = []
     contributions_list = []
     node_energies_list = []
-
-    # EMLE per-atom outputs (split per graph, then flattened over batches)
     emle_s_collection = []
     emle_q_core_collection = []
     emle_q_collection = []
@@ -197,20 +175,19 @@ def run(args: argparse.Namespace) -> None:
                 )[:-1]
             )
 
-        if args.return_emle:
-            for key, collection in [
-                ("valence_widths", emle_s_collection),
-                ("core_charges", emle_q_core_collection),
-                ("charges", emle_q_collection),
-                ("atomic_dipoles", emle_mu_collection),
-            ]:
-                if output.get(key) is not None:
-                    split = np.split(
-                        torch_tools.to_numpy(output[key]),
-                        indices_or_sections=ptr,
-                        axis=0,
-                    )
-                    collection.append(split[:-1])
+        for key, collection in [
+            ("valence_widths", emle_s_collection),
+            ("core_charges", emle_q_core_collection),
+            ("charges", emle_q_collection),
+            ("atomic_dipoles", emle_mu_collection),
+        ]:
+            if output.get(key) is not None:
+                split = np.split(
+                    torch_tools.to_numpy(output[key]),
+                    indices_or_sections=ptr,
+                    axis=0,
+                )
+                collection.append(split[:-1])
 
     energies = np.concatenate(energies_list, axis=0)
     forces_list = [f for batch in forces_collection for f in batch]
@@ -225,11 +202,10 @@ def run(args: argparse.Namespace) -> None:
     if args.return_node_energies and node_energies_list:
         node_energies = [ne for batch in node_energies_list for ne in batch]
 
-    if args.return_emle:
-        emle_s = [s for batch in emle_s_collection for s in batch]
-        emle_q_core = [q for batch in emle_q_core_collection for q in batch]
-        emle_q = [q for batch in emle_q_collection for q in batch]
-        emle_mu = [m for batch in emle_mu_collection for m in batch]
+    emle_s = [s for batch in emle_s_collection for s in batch]
+    emle_q_core = [q for batch in emle_q_core_collection for q in batch]
+    emle_q = [q for batch in emle_q_collection for q in batch]
+    emle_mu = [m for batch in emle_mu_collection for m in batch]
 
     # Store results in atoms objects
     for i, (atoms, energy, forces) in enumerate(zip(atoms_list, energies, forces_list)):
@@ -246,15 +222,14 @@ def run(args: argparse.Namespace) -> None:
         if args.return_node_energies and node_energies_list:
             atoms.arrays[args.info_prefix + "node_energies"] = node_energies[i]
 
-        if args.return_emle:
-            if emle_s:
-                atoms.arrays[args.info_prefix + "s"] = emle_s[i]
-            if emle_q_core:
-                atoms.arrays[args.info_prefix + "q_core"] = emle_q_core[i]
-            if emle_q:
-                atoms.arrays[args.info_prefix + "q"] = emle_q[i]
-            if emle_mu:
-                atoms.arrays[args.info_prefix + "mu"] = emle_mu[i]
+        if emle_s:
+            atoms.arrays[args.info_prefix + "s"] = emle_s[i]
+        if emle_q_core:
+            atoms.arrays[args.info_prefix + "q_core"] = emle_q_core[i]
+        if emle_q:
+            atoms.arrays[args.info_prefix + "q"] = emle_q[i]
+        if emle_mu:
+            atoms.arrays[args.info_prefix + "mu"] = emle_mu[i]
 
     ase.io.write(args.output, images=atoms_list, format="extxyz")
 
