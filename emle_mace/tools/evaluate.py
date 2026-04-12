@@ -36,6 +36,7 @@ def make_emle_evaluate(original_evaluate):
         delta_q_core, q_core_ref = [], []
         delta_q, q_ref = [], []
         delta_mu, mu_ref = [], []
+        delta_alpha_triu, alpha_triu_ref = [], []
 
         for param in model.parameters():
             param.requires_grad = False
@@ -76,8 +77,36 @@ def make_emle_evaluate(original_evaluate):
                     delta_mu.append((pred_mu - ref_mu).detach().cpu())
                     mu_ref.append(ref_mu.detach().cpu())
 
-                # Polarizability (alpha) is not directly in model output for EnergyEMLEMACE;
-                # it requires the Thole model computation in the loss fn. Skipped here.
+                # Polarizability: computed via Thole model from model outputs.
+                ref_alpha = getattr(batch, "polarizability", None)
+                if (
+                    ref_alpha is not None
+                    and output.get("valence_widths") is not None
+                    and output.get("charges") is not None
+                    and output.get("core_charges") is not None
+                    and output.get("a_Thole") is not None
+                    and output.get("alpha_v_ratios") is not None
+                ):
+                    s_pred = output["valence_widths"]
+                    valence_charges = output["charges"] - output["core_charges"]
+                    # Same sanity guard as in the loss function: skip batches
+                    # where s or q_val are out of the physical range expected
+                    # by the Thole model to avoid NaN propagation.
+                    if not (
+                        torch.min(s_pred) < 0.3
+                        or torch.max(s_pred) > 1.0
+                        or torch.max(valence_charges) > -0.5
+                    ):
+                        try:
+                            from emle_mace.loss import compute_molecular_polarizabilities
+                            pred_alpha = compute_molecular_polarizabilities(batch, output)
+                            triu_row, triu_col = torch.triu_indices(3, 3, offset=0)
+                            pred_triu = pred_alpha[:, triu_row, triu_col].detach().cpu()
+                            ref_triu = ref_alpha[:, triu_row, triu_col].detach().cpu()
+                            delta_alpha_triu.append(pred_triu - ref_triu)
+                            alpha_triu_ref.append(ref_triu)
+                        except Exception:
+                            pass
         finally:
             for param in model.parameters():
                 param.requires_grad = True
@@ -105,6 +134,12 @@ def make_emle_evaluate(original_evaluate):
             r = torch.cat(mu_ref)
             aux["rmse_emle_mu"] = _compute_rmse(d)
             aux["rel_rmse_emle_mu"] = (d.pow(2).mean().sqrt() / r.pow(2).mean().sqrt() * 100).item() if r.pow(2).mean() > 0 else float("nan")
+
+        if delta_alpha_triu:
+            d = torch.cat(delta_alpha_triu)
+            r = torch.cat(alpha_triu_ref)
+            aux["rmse_emle_alpha"] = _compute_rmse(d)
+            aux["rel_rmse_emle_alpha"] = (d.pow(2).mean().sqrt() / r.pow(2).mean().sqrt() * 100).item() if r.pow(2).mean() > 0 else float("nan")
 
         return avg_loss, aux
 
