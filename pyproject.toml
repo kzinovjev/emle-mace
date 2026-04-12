@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 emle-mace-train = "emle_mace.cli._entry:main"
+emle-mace-eval = "emle_mace.cli._eval_entry:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
