@@ -120,7 +120,8 @@ def extract_config_emle_mace_model(model):
     import torch
     import numpy as np
 
-    if not isinstance(model, EnergyEMLEMACE):
+    model_name = getattr(model, "original_name", model.__class__.__name__)
+    if not isinstance(model, EnergyEMLEMACE) and model_name != "EnergyEMLEMACE":
         return {"error": f"Model is not an EnergyEMLEMACE instance (got {model.__class__.__name__})"}
 
     def radial_to_name(radial_type):
