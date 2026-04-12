@@ -138,6 +138,7 @@ def run(args: argparse.Namespace) -> None:
     emle_q_core_collection = []
     emle_q_collection = []
     emle_mu_collection = []
+    emle_alpha_list = []  # per-structure [3, 3]
 
     for batch in data_loader:
         batch = batch.to(device)
@@ -189,6 +190,21 @@ def run(args: argparse.Namespace) -> None:
                 )
                 collection.append(split[:-1])
 
+        # Molecular polarizability via Thole model (per-structure, shape [n_mols, 3, 3]).
+        if (
+            output.get("a_Thole") is not None
+            and output.get("alpha_v_ratios") is not None
+            and output.get("valence_widths") is not None
+            and output.get("charges") is not None
+            and output.get("core_charges") is not None
+        ):
+            try:
+                from emle_mace.loss import compute_molecular_polarizabilities
+                alpha = compute_molecular_polarizabilities(batch, output)
+                emle_alpha_list.extend(torch_tools.to_numpy(alpha))
+            except Exception:
+                pass
+
     energies = np.concatenate(energies_list, axis=0)
     forces_list = [f for batch in forces_collection for f in batch]
     assert len(atoms_list) == len(energies) == len(forces_list)
@@ -230,6 +246,8 @@ def run(args: argparse.Namespace) -> None:
             atoms.arrays[args.info_prefix + "q"] = emle_q[i]
         if emle_mu:
             atoms.arrays[args.info_prefix + "mu"] = emle_mu[i]
+        if emle_alpha_list:
+            atoms.info[args.info_prefix + "alpha"] = emle_alpha_list[i]
 
     ase.io.write(args.output, images=atoms_list, format="extxyz")
 
