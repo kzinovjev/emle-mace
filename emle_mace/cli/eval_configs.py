@@ -104,11 +104,14 @@ def run(args: argparse.Namespace) -> None:
     for param in model.parameters():
         param.requires_grad = False
 
-    is_emle_model = isinstance(model, EnergyEMLEMACE)
+    # Detect EnergyEMLEMACE: handles both the uncompiled class and compiled
+    # (RecursiveScriptModule) variants whose original_name is "EnergyEMLEMACE".
+    model_class_name = getattr(model, "original_name", type(model).__name__)
+    is_emle_model = isinstance(model, EnergyEMLEMACE) or model_class_name == "EnergyEMLEMACE"
     if args.return_emle and not is_emle_model:
         raise ValueError(
             f"--return_emle requires an EnergyEMLEMACE model, "
-            f"but loaded model is {type(model).__name__}"
+            f"but loaded model is {model_class_name}"
         )
 
     # Load configurations
