@@ -75,25 +75,18 @@ def get_swa(args, model, optimizer, swas, dipole_only=False):
     )
 
     import torch
+    from torch.optim.swa_utils import AveragedModel, SWALR
     from mace.tools.scripts_utils import SWAContainer
-    from torch_ema import ExponentialMovingAverage
-    from typing import Optional
 
-    ema: Optional[ExponentialMovingAverage] = None
-    if args.ema:
-        ema = ExponentialMovingAverage(model.parameters(), decay=args.ema_decay)
-
-    return (
-        SWAContainer(
-            model=model,
-            scheduler=torch.optim.swa_utils.SWALR(
-                optimizer=optimizer,
-                swa_lr=args.swa_lr,
-                anneal_epochs=1,
-                anneal_strategy="cos",
-            ),
-            start=args.start_swa,
-            loss_fn=loss_fn_energy,
+    swa = SWAContainer(
+        model=AveragedModel(model),
+        scheduler=SWALR(
+            optimizer=optimizer,
+            swa_lr=args.swa_lr,
+            anneal_epochs=1,
+            anneal_strategy="linear",
         ),
-        ema,
+        start=args.start_swa,
+        loss_fn=loss_fn_energy,
     )
+    return swa, swas

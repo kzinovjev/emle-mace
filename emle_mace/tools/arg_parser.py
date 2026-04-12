@@ -42,6 +42,26 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
                 action.choices.append("energy_emle")
             break
 
+    # ------------------------------------------------ EMLE data-key arguments
+    parser.add_argument(
+        "--valence_widths_key",
+        help="key for per-atom valence widths (s) in the data files",
+        type=str,
+        default="s",
+    )
+    parser.add_argument(
+        "--core_charges_key",
+        help="key for per-atom core charges (q_core) in the data files",
+        type=str,
+        default="q_core",
+    )
+    parser.add_argument(
+        "--atomic_dipoles_key",
+        help="key for per-atom atomic dipoles (mu) in the data files",
+        type=str,
+        default="mu",
+    )
+
     # ------------------------------------------------ EMLE loss-weight arguments
     parser.add_argument(
         "--valence_widths_weight",

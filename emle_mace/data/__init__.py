@@ -43,8 +43,28 @@ def _emle_update_keyspec(keyspec, keydict):
     for key in emle_array_keys:
         if key in keydict:
             arrays_keys[key[:-4]] = keydict[key]
-    keyspec.update(arrays_keys=arrays_keys)
+    if arrays_keys:
+        keyspec.update(arrays_keys=arrays_keys)
     return result
+
+
+def make_emle_update_keyspec_from_kwargs(original_fn):
+    """Return a patched update_keyspec_from_kwargs that adds EMLE array keys.
+
+    This is used to patch the LOCAL binding inside mace.cli.run_train (which
+    imports the function directly via ``from mace.data import ...``).
+    """
+    def _emle_update_keyspec_from_kwargs(keyspec, keydict):
+        result = original_fn(keyspec, keydict)
+        emle_array_keys = ["valence_widths_key", "core_charges_key", "atomic_dipoles_key"]
+        arrays_keys = {}
+        for key in emle_array_keys:
+            if key in keydict:
+                arrays_keys[key[:-4]] = keydict[key]
+        if arrays_keys:
+            keyspec.update(arrays_keys=arrays_keys)
+        return result
+    return _emle_update_keyspec_from_kwargs
 
 
 @classmethod  # type: ignore[misc]

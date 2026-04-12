@@ -38,6 +38,8 @@ from emle_mace.tools.metrics import (
     log_emle_errors as _emle_log_errors,
 )
 import emle_mace.data as _emle_data
+from emle_mace.data import make_emle_update_keyspec_from_kwargs as _make_keyspec_wrapper
+from emle_mace.tools.evaluate import make_emle_evaluate as _make_evaluate_wrapper
 
 
 def _make_valid_err_log_wrapper(original):
@@ -65,6 +67,11 @@ def _patch_mace(args):
 
     Patches the bindings that differ for the EnergyEMLEMACE case.
     Returns a dict of the original bindings so they can be restored.
+
+    Note: ``update_keyspec_from_kwargs`` is imported as a local binding inside
+    ``mace.cli.run_train`` (via ``from mace.data import ...``), so we must patch
+    that module attribute directly — patching ``mace.data.utils`` alone is not
+    sufficient.
     """
     originals = {
         "configure_model": _mace_run_train.configure_model,
@@ -72,6 +79,8 @@ def _patch_mace(args):
         "get_swa": _mace_run_train.get_swa,
         "create_error_table": _mace_run_train.create_error_table,
         "valid_err_log": _mace_train_module.valid_err_log,
+        "evaluate": _mace_train_module.evaluate,
+        "update_keyspec_from_kwargs": _mace_run_train.update_keyspec_from_kwargs,
     }
 
     _mace_run_train.configure_model = _emle_configure_model
@@ -79,6 +88,10 @@ def _patch_mace(args):
     _mace_run_train.get_swa = _emle_get_swa
     _mace_run_train.create_error_table = _emle_create_error_table
     _mace_train_module.valid_err_log = _make_valid_err_log_wrapper(originals["valid_err_log"])
+    _mace_train_module.evaluate = _make_evaluate_wrapper(originals["evaluate"])
+    _mace_run_train.update_keyspec_from_kwargs = _make_keyspec_wrapper(
+        originals["update_keyspec_from_kwargs"]
+    )
 
     return originals
 
@@ -90,6 +103,8 @@ def _restore_mace(originals):
     _mace_run_train.get_swa = originals["get_swa"]
     _mace_run_train.create_error_table = originals["create_error_table"]
     _mace_train_module.valid_err_log = originals["valid_err_log"]
+    _mace_train_module.evaluate = originals["evaluate"]
+    _mace_run_train.update_keyspec_from_kwargs = originals["update_keyspec_from_kwargs"]
 
 
 def run(args) -> None:
