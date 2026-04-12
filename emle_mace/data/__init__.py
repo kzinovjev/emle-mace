@@ -70,6 +70,16 @@ def make_emle_update_keyspec_from_kwargs(original_fn):
 @classmethod  # type: ignore[misc]
 def _emle_from_config(cls, config, z_table, cutoff, heads=None, **kwargs):
     """Extend AtomicData.from_config to also populate EMLE fields."""
+    # Workaround for mace + numpy 2.x incompatibility:
+    # torch.tensor([numpy_ndarray_of_bool], dtype=torch.bool) raises TypeError
+    # because numpy.bool_ elements are no longer int-like in numpy 2.x.
+    # Convert pbc to plain Python bools before calling the original.
+    # Workaround for mace + numpy 2.x: config.pbc is tuple(atoms.get_pbc()),
+    # i.e. a tuple of numpy.bool_ values.  torch.tensor([tuple_of_numpy_bool])
+    # raises TypeError under numpy 2.x.  Convert to plain Python bools first.
+    if config.pbc is not None:
+        config.pbc = tuple(bool(p) for p in config.pbc)
+
     data = _orig_from_config.__func__(cls, config, z_table, cutoff, heads=heads, **kwargs)
     num_atoms = len(config.atomic_numbers)
     _dt = torch.get_default_dtype()
