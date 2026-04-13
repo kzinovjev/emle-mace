@@ -87,26 +87,16 @@ def make_emle_evaluate(original_evaluate):
                     and output.get("a_Thole") is not None
                     and output.get("alpha_v_ratios") is not None
                 ):
-                    s_pred = output["valence_widths"]
-                    valence_charges = output["charges"] - output["core_charges"]
-                    # Same sanity guard as in the loss function: skip batches
-                    # where s or q_val are out of the physical range expected
-                    # by the Thole model to avoid NaN propagation.
-                    if not (
-                        torch.min(s_pred) < 0.3
-                        or torch.max(s_pred) > 1.0
-                        or torch.max(valence_charges) > -0.5
-                    ):
-                        try:
-                            from emle_mace.loss import compute_molecular_polarizabilities
-                            pred_alpha = compute_molecular_polarizabilities(batch, output)
-                            triu_row, triu_col = torch.triu_indices(3, 3, offset=0)
-                            pred_triu = pred_alpha[:, triu_row, triu_col].detach().cpu()
-                            ref_triu = ref_alpha[:, triu_row, triu_col].detach().cpu()
-                            delta_alpha_triu.append(pred_triu - ref_triu)
-                            alpha_triu_ref.append(ref_triu)
-                        except Exception:
-                            pass
+                    try:
+                        from emle_mace.loss import compute_molecular_polarizabilities
+                        pred_alpha = compute_molecular_polarizabilities(batch, output)
+                        triu_row, triu_col = torch.triu_indices(3, 3, offset=0)
+                        pred_triu = pred_alpha[:, triu_row, triu_col].detach().cpu()
+                        ref_triu = ref_alpha[:, triu_row, triu_col].detach().cpu()
+                        delta_alpha_triu.append(pred_triu - ref_triu)
+                        alpha_triu_ref.append(ref_triu)
+                    except Exception:
+                        pass
         finally:
             for param in model.parameters():
                 param.requires_grad = True
