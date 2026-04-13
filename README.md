@@ -2,15 +2,8 @@
 
 A standalone Python package for training and evaluating the `EnergyEMLEMACE` model — a
 [MACE](https://github.com/ACEsuit/mace) potential extended with per-atom electrostatic
-properties required by the [EMLE-Engine](https://github.com/chemle/emle-engine) QM/MM
+properties required by the [EMLE-Engine](https://github.com/chemle/emle-engine) ML/MM
 framework.
-
-## Background
-
-The `EnergyEMLEMACE` model and its training loop were originally developed on the
-`emle-mace` branch of a MACE fork.  This package is a refactoring of that work into a
-separate repository that depends on unmodified upstream MACE and EMLE-Engine, rather than
-maintaining a fork.
 
 The integration is implemented almost entirely as monkey patches applied at training time
 to `mace.cli.run_train` and `mace.tools.train`.  The patched functions are restored after
@@ -22,8 +15,8 @@ training completes, so the standard MACE entry points are unaffected.
   per-atom output heads for valence widths (`s`), core charges (`q_core`), total charges
   (`q`), and atomic dipoles (`mu`), plus learnable global Thole damping parameter
   (`a_Thole`) and element-wise polarizability volume ratios
-  (`elements_alpha_v_ratios`).  Molecular polarizabilities are derived from these
-  quantities via the Thole damping model.
+  (`elements_alpha_v_ratios`).  Molecular polarizability tensors are derived from these
+  quantities via the Thole model for training on reference QM values.
 
 - **Loss function** (`emle_mace.loss`) — extends the standard MACE loss with weighted
   RMSE terms for each EMLE property.
@@ -41,14 +34,8 @@ training completes, so the standard MACE entry points are unaffected.
 MACE and EMLE-Engine must be installed separately before installing this package.
 
 ```bash
-# 1. Install MACE (upstream or the version pinned in your environment)
-pip install mace-torch
-
-# 2. Install EMLE-Engine
-pip install emle-engine
-
 # 3. Install this package
-git clone <this-repo>
+git clone https://github.com/kzinovjev/emle-mace.git
 cd emle-mace
 pip install -e .
 ```
@@ -75,7 +62,7 @@ emle-mace-train \
     --charges_weight 10000 \
     --atomic_dipoles_weight 100 \
     --polarizability_weight 0.01 \
-    ...  # all standard mace-run-train arguments are accepted
+    ...  # all standard mace_run_train arguments are accepted
 ```
 
 Evaluation:
@@ -84,5 +71,6 @@ Evaluation:
 emle-mace-eval \
     --model_path model.pt \
     --test_file test.extxyz \
-    --output results.json
+    --output results.json \
+    ...  # all standard mace_eval_configs arguments are accepted
 ```
