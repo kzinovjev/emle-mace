@@ -28,7 +28,10 @@ import mace.cli.run_train as _mace_run_train
 _mace_train_module = importlib.import_module("mace.tools.train")
 
 from emle_mace.tools.arg_parser import build_emle_arg_parser
-from emle_mace.tools.model_utils import configure_model as _emle_configure_model
+from emle_mace.tools.model_utils import (
+    configure_model as _emle_configure_model,
+    get_emle_params_options as _emle_get_params_options,
+)
 from emle_mace.tools.scripts_utils import (
     get_loss_fn as _emle_get_loss_fn,
     get_swa as _emle_get_swa,
@@ -77,6 +80,7 @@ def _patch_mace(args):
         "configure_model": _mace_run_train.configure_model,
         "get_loss_fn": _mace_run_train.get_loss_fn,
         "get_swa": _mace_run_train.get_swa,
+        "get_params_options": _mace_run_train.get_params_options,
         "create_error_table": _mace_run_train.create_error_table,
         "valid_err_log": _mace_train_module.valid_err_log,
         "evaluate": _mace_train_module.evaluate,
@@ -86,6 +90,7 @@ def _patch_mace(args):
     _mace_run_train.configure_model = _emle_configure_model
     _mace_run_train.get_loss_fn = _emle_get_loss_fn
     _mace_run_train.get_swa = _emle_get_swa
+    _mace_run_train.get_params_options = _emle_get_params_options
     _mace_run_train.create_error_table = _emle_create_error_table
     _mace_train_module.valid_err_log = _make_valid_err_log_wrapper(originals["valid_err_log"])
     _mace_train_module.evaluate = _make_evaluate_wrapper(originals["evaluate"])
@@ -101,6 +106,7 @@ def _restore_mace(originals):
     _mace_run_train.configure_model = originals["configure_model"]
     _mace_run_train.get_loss_fn = originals["get_loss_fn"]
     _mace_run_train.get_swa = originals["get_swa"]
+    _mace_run_train.get_params_options = originals["get_params_options"]
     _mace_run_train.create_error_table = originals["create_error_table"]
     _mace_train_module.valid_err_log = originals["valid_err_log"]
     _mace_train_module.evaluate = originals["evaluate"]
