@@ -5,8 +5,10 @@ A standalone Python package for training and evaluating the `EnergyEMLEMACE` mod
 properties required by the [EMLE-Engine](https://github.com/chemle/emle-engine) ML/MM
 framework.
 
+The `EnergyEMLEMACE` class and the related training code were first implemented directly
+in MACE, and then refactored into this package with Claude Code (Sonnet 4.6 model).
 The integration is implemented almost entirely as monkey patches applied at training time
-to `mace.cli.run_train` and `mace.tools.train`.  The patched functions are restored after
+to `mace.cli.run_train` and `mace.tools.train`. The patched functions are restored after
 training completes, so the standard MACE entry points are unaffected.
 
 ## What the package provides
