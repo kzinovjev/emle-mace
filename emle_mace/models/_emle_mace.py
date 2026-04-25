@@ -19,7 +19,6 @@ from mace.modules.blocks import (
     InteractionBlock,
     LinearNodeEmbeddingBlock,
     LinearReadoutBlock,
-    NonLinearReadoutBlock,
     RadialEmbeddingBlock,
 )
 from mace.modules.embeddings import GenericJointEmbedding
@@ -32,6 +31,8 @@ from mace.modules.utils import (
     get_symmetric_displacement,
     prepare_graph,
 )
+
+from ._readouts import EMLENonLinearReadoutBlock
 
 
 @compile_mode("script")
@@ -85,7 +86,6 @@ class EnergyEMLEMACE(torch.nn.Module):
         embedding_specs: Optional[Dict[str, Any]] = None,
         oeq_config: Optional[Dict[str, Any]] = None,
         lammps_mliap: Optional[bool] = False,
-        readout_cls: Optional[Type[NonLinearReadoutBlock]] = NonLinearReadoutBlock,
     ):
         super().__init__()
         self.register_buffer(
@@ -254,8 +254,13 @@ class EnergyEMLEMACE(torch.nn.Module):
             self.products.append(prod)
             if i == num_interactions - 2:
                 self.readouts.append(
-                    NonLinearReadoutBlock(
-                        hidden_irreps_out, MLP_irreps, gate, o3.Irreps("4x0e + 1x1o")
+                    EMLENonLinearReadoutBlock(
+                        hidden_irreps_out,
+                        MLP_irreps,
+                        gate,
+                        irreps_out=o3.Irreps("4x0e + 1x1o"),
+                        cueq_config=cueq_config,
+                        oeq_config=oeq_config,
                     )
                 )
             elif not use_last_readout_only:

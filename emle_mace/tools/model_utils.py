@@ -174,7 +174,7 @@ def extract_config_emle_mace_model(model):
         ),
         "gate": (
             model.readouts[-1]
-            .non_linearity._modules["acts"][0]
+            .equivariant_nonlin.act_scalars._modules["acts"][0]
             .f
             if model.num_interactions.item() > 1
             else None
@@ -184,7 +184,6 @@ def extract_config_emle_mace_model(model):
         "use_agnostic_product": getattr(model, "use_agnostic_product", False),
         "use_last_readout_only": getattr(model, "use_last_readout_only", False),
         "use_embedding_readout": hasattr(model, "embedding_readout"),
-        "readout_cls": model.readouts[-1].__class__,
         "cueq_config": getattr(model, "cueq_config", None),
         "atomic_energies": model.atomic_energies_fn.atomic_energies.cpu().numpy(),
         "avg_num_neighbors": model.interactions[0].avg_num_neighbors,

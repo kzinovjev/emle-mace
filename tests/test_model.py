@@ -153,3 +153,89 @@ def test_model_parameters_exist():
     param_names = [n for n, _ in model.named_parameters()]
     assert "a_Thole" in param_names
     assert "elements_alpha_v_ratios" in param_names
+
+
+def _build_batch_from_positions(positions: np.ndarray):
+    cfg = data.Configuration(
+        atomic_numbers=np.array([8, 1, 1]),
+        positions=positions,
+        properties={
+            "energy": 0.0,
+            "forces": np.zeros((3, 3)),
+            "valence_widths": np.zeros(3),
+            "core_charges": np.zeros(3),
+            "charges": np.zeros(3),
+            "atomic_dipoles": np.zeros((3, 3)),
+            "polarizability": np.zeros((3, 3)),
+            "total_charge": 0.0,
+        },
+        property_weights={
+            "energy": 1.0, "forces": 1.0,
+            "valence_widths": 1.0, "core_charges": 1.0,
+            "charges": 1.0, "atomic_dipoles": 1.0,
+            "polarizability": 1.0,
+        },
+    )
+    atoms = [data.AtomicData.from_config(cfg, z_table=TABLE, cutoff=R_MAX)]
+    return next(iter(torch_geometric.dataloader.DataLoader(
+        atoms, batch_size=1, shuffle=False)))
+
+
+def test_dipole_equivariance():
+    """Atomic dipoles rotate covariantly with input positions; scalars are invariant.
+
+    Regression test for the dead-dipole bug: the previous final readout used a
+    scalar-only Activation, silently zeroing the deep dipole-path weights. The
+    Gate-based replacement must contribute a real, equivariant dipole signal.
+    """
+    torch.manual_seed(0)
+    model = _make_model()
+    model.eval()
+
+    R = o3.rand_matrix().to(torch.get_default_dtype())
+
+    positions = np.array([
+        [0.00, 0.00, 0.00],
+        [0.96, 0.00, 0.00],
+        [-0.24, 0.93, 0.00],
+    ])
+    rotated_positions = positions @ R.numpy().T
+
+    batch_orig = _build_batch_from_positions(positions)
+    batch_rot = _build_batch_from_positions(rotated_positions)
+
+    out_orig = model(batch_orig.to_dict(), training=False, compute_force=False)
+    out_rot = model(batch_rot.to_dict(), training=False, compute_force=False)
+
+    # Scalars are rotation-invariant.
+    assert torch.allclose(out_orig["energy"], out_rot["energy"], atol=1e-8)
+    assert torch.allclose(out_orig["valence_widths"], out_rot["valence_widths"], atol=1e-8)
+    assert torch.allclose(out_orig["core_charges"], out_rot["core_charges"], atol=1e-8)
+    assert torch.allclose(out_orig["charges"], out_rot["charges"], atol=1e-8)
+
+    # Dipoles transform as a vector: mu_rot = mu_orig @ R^T.
+    expected = out_orig["atomic_dipoles"] @ R.T
+    assert torch.allclose(out_rot["atomic_dipoles"], expected, atol=1e-7)
+
+    # Sanity: the total dipole signal is non-zero at init.
+    assert out_orig["atomic_dipoles"].abs().sum().item() > 0
+
+
+def test_deep_readout_contributes_to_dipoles():
+    """The final non-linear readout must contribute a non-zero l=1 output.
+
+    With the old scalar-only Activation, the l=1 channel of linear_2 was forced
+    to zero by equivariance — the deep readout's dipole output was identically
+    zero for any input. This test fails on the buggy code.
+    """
+    torch.manual_seed(0)
+    model = _make_model()
+    deep_readout = model.readouts[-1]
+
+    in_dim = deep_readout.linear_1.irreps_in.dim
+    x = torch.randn(4, in_dim, dtype=torch.get_default_dtype())
+    y = deep_readout(x)
+
+    # Output irreps are "4x0e + 1x1o" — components 4:7 are the dipole.
+    dipole_part = y[..., 4:]
+    assert dipole_part.abs().sum().item() > 0
