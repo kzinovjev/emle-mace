@@ -26,6 +26,7 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
         if action.dest == "model":
             if "EnergyEMLEMACE" not in action.choices:
                 action.choices.append("EnergyEMLEMACE")
+            action.default = "EnergyEMLEMACE"
             break
 
     # ------------------------------------------------------------ error_table
