@@ -143,9 +143,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.model != "EnergyEMLEMACE":
-        logging.warning(
-            f"emle-mace-train is intended for EnergyEMLEMACE models; "
-            f"got --model={args.model}.  Proceeding anyway via standard mace."
+        parser.error(
+            f"emle-mace-train requires --model EnergyEMLEMACE; got --model={args.model}. "
         )
 
     run(args)
