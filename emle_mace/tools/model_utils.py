@@ -100,7 +100,7 @@ def configure_model(args, train_loader, atomic_energies, model_foundation=None,
         f"spherical harmonics up to l={args.max_ell}"
     )
     logging.info(
-        f"Radial cutoff: {args.r_max} Å  |  "
+        f"Radial cutoff: {args.r_max} A  |  "
         f"{args.num_radial_basis} radial basis, {args.num_cutoff_basis} cutoff basis"
     )
 

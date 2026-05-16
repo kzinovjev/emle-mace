@@ -47,7 +47,7 @@ def create_emle_error_table(
     table.field_names = [
         "config_type",
         "RMSE E / meV / atom",
-        "RMSE F / meV / Å",
+        "RMSE F / meV / A",
         "rel F RMSE %",
         "RMSE s [Bohr]",
         "rel RMSE s %",
@@ -137,7 +137,7 @@ def log_emle_errors(
         f"{initial_phrase}: head: {valid_loader_name}, "
         f"loss={valid_loss:8.8f}, "
         f"RMSE_E_per_atom={error_e:8.2f} meV, "
-        f"RMSE_F={error_f:8.2f} meV/Å, "
+        f"RMSE_F={error_f:8.2f} meV/A, "
         f"RMSE_s={error_s:7.4f} Bohr, "
         f"RMSE_q_core={error_q_core:7.4f} e, "
         f"RMSE_q={error_q:7.4f} e, "
