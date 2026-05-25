@@ -2,7 +2,8 @@
 
 Wraps mace's ``evaluate`` function to also compute EMLE-specific RMSE metrics
 (valence_widths/s, core_charges/q_core, charges/q, atomic_dipoles/mu,
-polarizability/alpha) which are not tracked by mace's standard ``MACELoss``.
+atomic_quadrupoles/theta, polarizability/alpha) which are not tracked by mace's
+standard ``MACELoss``.
 """
 
 import torch
@@ -36,6 +37,7 @@ def make_emle_evaluate(original_evaluate):
         delta_q_core, q_core_ref = [], []
         delta_q, q_ref = [], []
         delta_mu, mu_ref = [], []
+        delta_theta, theta_ref = [], []
         delta_alpha_triu, alpha_triu_ref = [], []
 
         for param in model.parameters():
@@ -76,6 +78,14 @@ def make_emle_evaluate(original_evaluate):
                     ref_mu = batch.atomic_dipoles
                     delta_mu.append((pred_mu - ref_mu).detach().cpu())
                     mu_ref.append(ref_mu.detach().cpu())
+
+                if output.get("atomic_quadrupoles") is not None and hasattr(batch, "atomic_quadrupoles") and batch.atomic_quadrupoles is not None:
+                    # Reduce the predicted 3x3 to the 6 reference components.
+                    triu_row, triu_col = torch.triu_indices(3, 3, offset=0)
+                    pred_theta = output["atomic_quadrupoles"][:, triu_row, triu_col]
+                    ref_theta = batch.atomic_quadrupoles
+                    delta_theta.append((pred_theta - ref_theta).detach().cpu())
+                    theta_ref.append(ref_theta.detach().cpu())
 
                 # Polarizability: computed via Thole model from model outputs.
                 ref_alpha = getattr(batch, "polarizability", None)
@@ -124,6 +134,12 @@ def make_emle_evaluate(original_evaluate):
             r = torch.cat(mu_ref)
             aux["rmse_emle_mu"] = _compute_rmse(d)
             aux["rel_rmse_emle_mu"] = (d.pow(2).mean().sqrt() / r.pow(2).mean().sqrt() * 100).item() if r.pow(2).mean() > 0 else float("nan")
+
+        if delta_theta:
+            d = torch.cat(delta_theta)
+            r = torch.cat(theta_ref)
+            aux["rmse_emle_theta"] = _compute_rmse(d)
+            aux["rel_rmse_emle_theta"] = (d.pow(2).mean().sqrt() / r.pow(2).mean().sqrt() * 100).item() if r.pow(2).mean() > 0 else float("nan")
 
         if delta_alpha_triu:
             d = torch.cat(delta_alpha_triu)

@@ -2,8 +2,9 @@
 # Evaluation script for EnergyEMLEMACE models
 #
 # Runs inference and writes per-atom EMLE properties (valence_widths/s,
-# core_charges/q_core, charges/q, atomic_dipoles/mu) alongside energy and forces
-# to the output XYZ file.
+# core_charges/q_core, charges/q, atomic_dipoles/mu, atomic_quadrupoles/theta)
+# alongside energy and forces to the output XYZ file. Quadrupoles are written as
+# the 6 components [xx, xy, xz, yy, yz, zz] of the symmetric traceless tensor.
 ###########################################################################################
 
 import argparse
@@ -138,6 +139,7 @@ def run(args: argparse.Namespace) -> None:
     emle_q_core_collection = []
     emle_q_collection = []
     emle_mu_collection = []
+    emle_theta_collection = []
     emle_alpha_list = []  # per-structure [3, 3]
 
     for batch in data_loader:
@@ -190,6 +192,17 @@ def run(args: argparse.Namespace) -> None:
                 )
                 collection.append(split[:-1])
 
+        # Write quadrupoles as the 6 components [xx, xy, xz, yy, yz, zz].
+        if output.get("atomic_quadrupoles") is not None:
+            triu_row, triu_col = torch.triu_indices(3, 3, offset=0)
+            theta_6 = output["atomic_quadrupoles"][:, triu_row, triu_col]
+            split = np.split(
+                torch_tools.to_numpy(theta_6),
+                indices_or_sections=ptr,
+                axis=0,
+            )
+            emle_theta_collection.append(split[:-1])
+
         # Molecular polarizability via Thole model (per-structure, shape [n_mols, 3, 3]).
         if (
             output.get("a_Thole") is not None
@@ -222,6 +235,7 @@ def run(args: argparse.Namespace) -> None:
     emle_q_core = [q for batch in emle_q_core_collection for q in batch]
     emle_q = [q for batch in emle_q_collection for q in batch]
     emle_mu = [m for batch in emle_mu_collection for m in batch]
+    emle_theta = [t for batch in emle_theta_collection for t in batch]
 
     # Store results in atoms objects
     for i, (atoms, energy, forces) in enumerate(zip(atoms_list, energies, forces_list)):
@@ -246,6 +260,8 @@ def run(args: argparse.Namespace) -> None:
             atoms.arrays[args.info_prefix + "q"] = emle_q[i]
         if emle_mu:
             atoms.arrays[args.info_prefix + "mu"] = emle_mu[i]
+        if emle_theta:
+            atoms.arrays[args.info_prefix + "theta"] = emle_theta[i]
         if emle_alpha_list:
             atoms.info[args.info_prefix + "alpha"] = emle_alpha_list[i]
 

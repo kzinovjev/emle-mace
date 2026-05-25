@@ -30,6 +30,7 @@ def get_loss_fn(args, *extra_args, **extra_kwargs):
         core_charges_weight=getattr(args, "core_charges_weight", 1.0),
         charges_weight=getattr(args, "charges_weight", 1.0),
         atomic_dipoles_weight=getattr(args, "atomic_dipoles_weight", 1.0),
+        atomic_quadrupoles_weight=getattr(args, "atomic_quadrupoles_weight", 1.0),
         polarizability_weight=getattr(args, "polarizability_weight", 10.0),
     )
     logging.info(f"Loss function: {loss_fn}")
@@ -65,6 +66,7 @@ def get_swa(args, model, optimizer, swas, dipole_only=False):
         core_charges_weight=getattr(args, "core_charges_weight", 1.0),
         charges_weight=getattr(args, "charges_weight", 1.0),
         atomic_dipoles_weight=getattr(args, "atomic_dipoles_weight", 1.0),
+        atomic_quadrupoles_weight=getattr(args, "atomic_quadrupoles_weight", 1.0),
         polarizability_weight=getattr(args, "polarizability_weight", 10.0),
     )
     logging.info(

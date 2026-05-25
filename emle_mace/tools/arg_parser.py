@@ -62,6 +62,16 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default="mu",
     )
+    parser.add_argument(
+        "--atomic_quadrupoles_key",
+        help=(
+            "key for per-atom atomic quadrupoles (theta) in the data files; "
+            "the 6 components of the symmetric traceless Cartesian quadrupole "
+            "in order [xx, xy, xz, yy, yz, zz]"
+        ),
+        type=str,
+        default="theta",
+    )
 
     # ------------------------------------------------ EMLE loss-weight arguments
     parser.add_argument(
@@ -85,6 +95,12 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--atomic_dipoles_weight",
         help="weight of atomic dipoles (mu) loss",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--atomic_quadrupoles_weight",
+        help="weight of atomic quadrupoles (theta) loss",
         type=float,
         default=1.0,
     )

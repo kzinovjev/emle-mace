@@ -148,6 +148,31 @@ def mean_squared_error_atomic_dipoles(
     return _reduce_loss(raw_loss, ddp)
 
 
+def mean_squared_error_atomic_quadrupoles(
+    ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+) -> torch.Tensor:
+    """MSE on the symmetric traceless Cartesian atomic quadrupoles.
+
+    The model predicts a (n_atoms, 3, 3) tensor; the reference is stored as the
+    6 upper-triangle components [xx, xy, xz, yy, yz, zz], so the prediction is
+    reduced to those 6 components before comparison.
+    """
+    configs_weight = torch.repeat_interleave(
+        ref.weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(-1)
+    configs_atomic_quadrupoles_weight = torch.repeat_interleave(
+        ref.atomic_quadrupoles_weight, ref.ptr[1:] - ref.ptr[:-1]
+    ).unsqueeze(-1)
+    triu_row, triu_col = torch.triu_indices(3, 3, offset=0)
+    pred_triu = pred["atomic_quadrupoles"][:, triu_row, triu_col]  # [n_atoms, 6]
+    raw_loss = (
+        configs_weight
+        * configs_atomic_quadrupoles_weight
+        * torch.square(ref["atomic_quadrupoles"] - pred_triu)
+    )
+    return _reduce_loss(raw_loss, ddp)
+
+
 def mean_squared_error_emle_polarizability(
     ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
 ) -> torch.Tensor:
@@ -181,7 +206,8 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
 
     Sums weighted MSE losses over:
       energy (interaction), forces, valence widths, core charges,
-      total charges, atomic dipoles, and molecular polarizability.
+      total charges, atomic dipoles, atomic quadrupoles, and molecular
+      polarizability.
     """
 
     def __init__(
@@ -192,6 +218,7 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
         core_charges_weight: float = 1.0,
         charges_weight: float = 1.0,
         atomic_dipoles_weight: float = 1.0,
+        atomic_quadrupoles_weight: float = 1.0,
         polarizability_weight: float = 10.0,
     ) -> None:
         super().__init__()
@@ -220,6 +247,10 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
             torch.tensor(atomic_dipoles_weight, dtype=torch.get_default_dtype()),
         )
         self.register_buffer(
+            "atomic_quadrupoles_weight",
+            torch.tensor(atomic_quadrupoles_weight, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
             "polarizability_weight",
             torch.tensor(polarizability_weight, dtype=torch.get_default_dtype()),
         )
@@ -235,6 +266,7 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
         loss_core_charges = mean_squared_error_core_charges(ref, pred, ddp)
         loss_charges = mean_squared_error_charges(ref, pred, ddp)
         loss_atomic_dipoles = mean_squared_error_atomic_dipoles(ref, pred, ddp)
+        loss_atomic_quadrupoles = mean_squared_error_atomic_quadrupoles(ref, pred, ddp)
         loss_polarizability = mean_squared_error_emle_polarizability(ref, pred, ddp)
 
         return (
@@ -244,6 +276,7 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
             + self.core_charges_weight * loss_core_charges
             + self.charges_weight * loss_charges
             + self.atomic_dipoles_weight * loss_atomic_dipoles
+            + self.atomic_quadrupoles_weight * loss_atomic_quadrupoles
             + self.polarizability_weight * loss_polarizability
         )
 
@@ -256,5 +289,6 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
             f"core_charges_weight={self.core_charges_weight:.3f}, "
             f"charges_weight={self.charges_weight:.3f}, "
             f"atomic_dipoles_weight={self.atomic_dipoles_weight:.3f}, "
+            f"atomic_quadrupoles_weight={self.atomic_quadrupoles_weight:.3f}, "
             f"polarizability_weight={self.polarizability_weight:.3f})"
         )

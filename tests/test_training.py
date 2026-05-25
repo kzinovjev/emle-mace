@@ -54,6 +54,8 @@ def fixture_emle_configs():
         q -= q.mean()
         c.new_array("REF_charges", q)
         c.new_array("REF_atomic_dipoles", rng.normal(0, 0.1, (n, 3)))
+        # 6 traceless Cartesian quadrupole components [xx, xy, xz, yy, yz, zz]
+        c.new_array("REF_atomic_quadrupoles", rng.normal(0, 0.1, (n, 6)))
         # 3x3 symmetric polarizability stored as flat 9-vector in atoms.info
         # (polarizability is a per-structure property, not per-atom)
         alpha = np.eye(3) * rng.uniform(4, 8)
@@ -99,8 +101,8 @@ def test_emle_mace_train(tmp_path, emle_configs):
     args.interaction_first = "RealAgnosticInteractionBlock"
     args.num_interactions = 2
     args.num_channels = 8
-    args.max_L = 1
-    args.hidden_irreps = "8x0e + 8x1o"
+    args.max_L = 2
+    args.hidden_irreps = "8x0e + 8x1o + 8x2e"
     args.MLP_irreps = "8x0e"
     args.correlation = 3
     args.radial_MLP = "[16, 16, 16]"
@@ -110,6 +112,7 @@ def test_emle_mace_train(tmp_path, emle_configs):
     args.core_charges_key = "REF_core_charges"
     args.charges_key = "REF_charges"
     args.atomic_dipoles_key = "REF_atomic_dipoles"
+    args.atomic_quadrupoles_key = "REF_atomic_quadrupoles"
     args.polarizability_key = "REF_polarizability"
     args.total_charge_key = "REF_total_charge"
     args.virials_key = ""

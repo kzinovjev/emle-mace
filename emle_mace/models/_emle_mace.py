@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, Union
 import numpy as np
 import torch
 from e3nn import o3
+from e3nn.io import CartesianTensor
 from e3nn.util.jit import compile_mode
 
 from mace.modules.blocks import (
@@ -34,16 +35,22 @@ from mace.modules.utils import (
 
 from ._readouts import EMLENonLinearReadoutBlock
 
+# Per-readout output irreps: 4 scalars (energy, valence_widths, core_charges,
+# charges), an l=1 odd vector (atomic dipole) and an l=2 even tensor (atomic
+# quadrupole, traceless symmetric Cartesian, expressed in the e3nn 2e basis).
+_EMLE_READOUT_IRREPS = o3.Irreps("4x0e + 1x1o + 1x2e")
+
 
 @compile_mode("script")
 class EnergyEMLEMACE(torch.nn.Module):
     """MACE model that jointly predicts energies/forces and EMLE embedding properties.
 
     In addition to the standard MACE energy and forces, this model outputs per-atom:
-      - valence_widths  (s)
-      - core_charges    (q_core)
-      - charges         (q, total = core + valence)
-      - atomic_dipoles  (mu)
+      - valence_widths      (s)
+      - core_charges        (q_core)
+      - charges             (q, total = core + valence)
+      - atomic_dipoles      (mu, l=1)
+      - atomic_quadrupoles  (theta, l=2 traceless symmetric Cartesian 3x3)
 
     and global per-graph:
       - a_Thole         (learnable Thole damping parameter)
@@ -210,7 +217,7 @@ class EnergyEMLEMACE(torch.nn.Module):
             self.readouts.append(
                 LinearReadoutBlock(
                     hidden_irreps,
-                    o3.Irreps("4x0e + 1x1o"),
+                    _EMLE_READOUT_IRREPS,
                     cueq_config,
                     oeq_config,
                 )
@@ -218,12 +225,16 @@ class EnergyEMLEMACE(torch.nn.Module):
 
         for i in range(num_interactions - 1):
             if i == num_interactions - 2:
-                assert (
-                    len(hidden_irreps) > 1
+                assert any(
+                    ir.l == 1 for _, ir in hidden_irreps
                 ), "To predict dipoles use at least l=1 hidden_irreps"
+                assert any(
+                    ir.l == 2 for _, ir in hidden_irreps
+                ), "To predict quadrupoles, hidden_irreps must contain an l=2 (2e) irrep"
+                # Last layer feeds the dipole (l=1) and quadrupole (l=2) readout.
                 hidden_irreps_out = str(
-                    hidden_irreps[:2]
-                )  # Select scalars and l=1 vectors for last layer
+                    o3.Irreps([(mul, ir) for mul, ir in hidden_irreps if ir.l <= 2])
+                )
             else:
                 hidden_irreps_out = hidden_irreps
             inter = interaction_cls(
@@ -258,7 +269,7 @@ class EnergyEMLEMACE(torch.nn.Module):
                         hidden_irreps_out,
                         MLP_irreps,
                         gate,
-                        irreps_out=o3.Irreps("4x0e + 1x1o"),
+                        irreps_out=_EMLE_READOUT_IRREPS,
                         cueq_config=cueq_config,
                         oeq_config=oeq_config,
                     )
@@ -267,7 +278,7 @@ class EnergyEMLEMACE(torch.nn.Module):
                 self.readouts.append(
                     LinearReadoutBlock(
                         hidden_irreps,
-                        o3.Irreps("4x0e + 1x1o"),
+                        _EMLE_READOUT_IRREPS,
                         cueq_config,
                         oeq_config,
                     )
@@ -276,6 +287,16 @@ class EnergyEMLEMACE(torch.nn.Module):
             self.elements_alpha_v_ratios = torch.nn.Parameter(
                 torch.ones(num_elements, dtype=torch.get_default_dtype()) * 0.1
             )
+
+        # Change-of-basis from the readout's l=2 output (5 e3nn 2e components) to a
+        # symmetric traceless 3x3 Cartesian quadrupole. CartesianTensor("ij=ji")
+        # decomposes as 1x0e + 1x2e; row 0 is the trace, which we drop.
+        _ct = CartesianTensor("ij=ji")
+        _basis = _ct.to_cartesian(torch.eye(6, dtype=torch.float64))  # [6, 3, 3]
+        self.register_buffer(
+            "quad_to_cartesian",
+            _basis[1:].to(torch.get_default_dtype()),  # [5, 3, 3]
+        )
 
     def forward(
         self,
@@ -371,6 +392,7 @@ class EnergyEMLEMACE(torch.nn.Module):
         node_core_charges_list = []
         node_charges_list = []
         node_atomic_dipoles_list = []
+        node_atomic_quadrupoles_list = []
 
         for i, (interaction, product) in enumerate(
             zip(self.interactions, self.products)
@@ -409,7 +431,9 @@ class EnergyEMLEMACE(torch.nn.Module):
             node_valence_widths_list.append(node_out[num_atoms_arange, 1])
             node_core_charges_list.append(node_out[num_atoms_arange, 2])
             node_charges_list.append(node_out[num_atoms_arange, 3])
-            node_atomic_dipoles_list.append(node_out[num_atoms_arange, 4:])
+            # Readout irreps: 4x0e (0:4) + 1x1o (4:7, dipole) + 1x2e (7:12, quad).
+            node_atomic_dipoles_list.append(node_out[num_atoms_arange, 4:7])
+            node_atomic_quadrupoles_list.append(node_out[num_atoms_arange, 7:12])
 
         contributions = torch.stack(energies, dim=-1)
         interaction_energy = torch.sum(contributions[:, 1:], dim=-1)
@@ -423,6 +447,9 @@ class EnergyEMLEMACE(torch.nn.Module):
         contributions_atomic_dipoles = torch.stack(
             node_atomic_dipoles_list, dim=-1
         )  # [n_nodes, 3, n_contributions]
+        contributions_atomic_quadrupoles = torch.stack(
+            node_atomic_quadrupoles_list, dim=-1
+        )  # [n_nodes, 5, n_contributions]
         valence_widths = torch.sum(contributions_valence_widths, dim=-1)  # [n_nodes]
         core_charges = torch.sum(contributions_core_charges, dim=-1)  # [n_nodes]
         charges = torch.sum(contributions_charges, dim=-1)  # [n_nodes]
@@ -435,6 +462,15 @@ class EnergyEMLEMACE(torch.nn.Module):
         charges = charges - total_charge_excess[data["batch"]]
 
         atomic_dipoles = torch.sum(contributions_atomic_dipoles, dim=-1)  # [n_nodes, 3]
+
+        # Sum the l=2 contributions, then map the 5 e3nn 2e components to a
+        # symmetric traceless 3x3 Cartesian quadrupole via the fixed change-of-basis.
+        atomic_quadrupoles_2e = torch.sum(
+            contributions_atomic_quadrupoles, dim=-1
+        )  # [n_nodes, 5]
+        atomic_quadrupoles = torch.einsum(
+            "kij,nk->nij", self.quad_to_cartesian, atomic_quadrupoles_2e
+        )  # [n_nodes, 3, 3]
 
         alpha_v_ratios = data["node_attrs"] @ self.elements_alpha_v_ratios
 
@@ -482,6 +518,7 @@ class EnergyEMLEMACE(torch.nn.Module):
             "core_charges": core_charges,
             "charges": charges,
             "atomic_dipoles": atomic_dipoles,
+            "atomic_quadrupoles": atomic_quadrupoles,
             "a_Thole": self.a_Thole,
             "alpha_v_ratios": alpha_v_ratios,
         }

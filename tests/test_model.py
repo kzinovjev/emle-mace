@@ -34,7 +34,7 @@ def _make_model():
         interaction_cls_first=modules.interaction_classes["RealAgnosticInteractionBlock"],
         num_interactions=2,
         num_elements=len(TABLE),
-        hidden_irreps=o3.Irreps("8x0e + 8x1o"),
+        hidden_irreps=o3.Irreps("8x0e + 8x1o + 8x2e"),
         MLP_irreps=o3.Irreps("8x0e"),
         atomic_energies=ATOMIC_ENERGIES,
         avg_num_neighbors=3.0,
@@ -58,6 +58,7 @@ def _make_batch(n_configs=1):
                 "core_charges": np.array([-1.0, 0.5, 0.5]),
                 "charges": np.array([-0.8, 0.4, 0.4]),
                 "atomic_dipoles": np.zeros((3, 3)),
+                "atomic_quadrupoles": np.zeros((3, 6)),
                 "polarizability": np.eye(3),
                 "total_charge": 0.0,
             },
@@ -68,6 +69,7 @@ def _make_batch(n_configs=1):
                 "core_charges": 1.0,
                 "charges": 1.0,
                 "atomic_dipoles": 1.0,
+                "atomic_quadrupoles": 1.0,
                 "polarizability": 1.0,
             },
         )
@@ -99,7 +101,7 @@ def test_forward_output_keys():
     required_keys = [
         "energy", "forces", "interaction_energy", "e0",
         "valence_widths", "core_charges", "charges",
-        "atomic_dipoles", "a_Thole", "alpha_v_ratios",
+        "atomic_dipoles", "atomic_quadrupoles", "a_Thole", "alpha_v_ratios",
     ]
     for key in required_keys:
         assert key in out, f"Missing output key: {key}"
@@ -120,6 +122,7 @@ def test_forward_output_shapes():
     assert out["core_charges"].shape == (n_atoms,)
     assert out["charges"].shape == (n_atoms,)
     assert out["atomic_dipoles"].shape == (n_atoms, 3)
+    assert out["atomic_quadrupoles"].shape == (n_atoms, 3, 3)
 
 
 def test_charge_conservation():
@@ -166,6 +169,7 @@ def _build_batch_from_positions(positions: np.ndarray):
             "core_charges": np.zeros(3),
             "charges": np.zeros(3),
             "atomic_dipoles": np.zeros((3, 3)),
+            "atomic_quadrupoles": np.zeros((3, 6)),
             "polarizability": np.zeros((3, 3)),
             "total_charge": 0.0,
         },
@@ -173,6 +177,7 @@ def _build_batch_from_positions(positions: np.ndarray):
             "energy": 1.0, "forces": 1.0,
             "valence_widths": 1.0, "core_charges": 1.0,
             "charges": 1.0, "atomic_dipoles": 1.0,
+            "atomic_quadrupoles": 1.0,
             "polarizability": 1.0,
         },
     )
@@ -182,12 +187,7 @@ def _build_batch_from_positions(positions: np.ndarray):
 
 
 def test_dipole_equivariance():
-    """Atomic dipoles rotate covariantly with input positions; scalars are invariant.
-
-    Regression test for the dead-dipole bug: the previous final readout used a
-    scalar-only Activation, silently zeroing the deep dipole-path weights. The
-    Gate-based replacement must contribute a real, equivariant dipole signal.
-    """
+    """Atomic dipoles rotate covariantly with input positions; scalars are invariant."""
     torch.manual_seed(0)
     model = _make_model()
     model.eval()
@@ -221,13 +221,45 @@ def test_dipole_equivariance():
     assert out_orig["atomic_dipoles"].abs().sum().item() > 0
 
 
-def test_deep_readout_contributes_to_dipoles():
-    """The final non-linear readout must contribute a non-zero l=1 output.
+def test_quadrupole_equivariance():
+    """Atomic quadrupoles transform as a rank-2 Cartesian tensor: Q_rot = R Q_orig R^T,
+    and stay symmetric and traceless for any input."""
+    torch.manual_seed(0)
+    model = _make_model()
+    model.eval()
 
-    With the old scalar-only Activation, the l=1 channel of linear_2 was forced
-    to zero by equivariance — the deep readout's dipole output was identically
-    zero for any input. This test fails on the buggy code.
-    """
+    R = o3.rand_matrix().to(torch.get_default_dtype())
+
+    positions = np.array([
+        [0.00, 0.00, 0.00],
+        [0.96, 0.00, 0.00],
+        [-0.24, 0.93, 0.00],
+    ])
+    rotated_positions = positions @ R.numpy().T
+
+    out_orig = model(_build_batch_from_positions(positions).to_dict(),
+                     training=False, compute_force=False)
+    out_rot = model(_build_batch_from_positions(rotated_positions).to_dict(),
+                    training=False, compute_force=False)
+
+    q_orig = out_orig["atomic_quadrupoles"]
+    q_rot = out_rot["atomic_quadrupoles"]
+
+    # Symmetric and traceless by construction.
+    assert torch.allclose(q_orig, q_orig.transpose(-1, -2), atol=1e-8)
+    trace = torch.diagonal(q_orig, dim1=-2, dim2=-1).sum(-1)
+    assert torch.allclose(trace, torch.zeros_like(trace), atol=1e-7)
+
+    # Q_rot = R Q_orig R^T.
+    expected = torch.einsum("ij,njk,lk->nil", R, q_orig, R)
+    assert torch.allclose(q_rot, expected, atol=1e-7)
+
+    # Sanity: a real (non-zero) quadrupole signal at init.
+    assert q_orig.abs().sum().item() > 0
+
+
+def test_deep_readout_contributes_to_dipoles():
+    """The final non-linear readout must contribute non-zero l=1 and l=2 outputs."""
     torch.manual_seed(0)
     model = _make_model()
     deep_readout = model.readouts[-1]
@@ -236,6 +268,9 @@ def test_deep_readout_contributes_to_dipoles():
     x = torch.randn(4, in_dim, dtype=torch.get_default_dtype())
     y = deep_readout(x)
 
-    # Output irreps are "4x0e + 1x1o" — components 4:7 are the dipole.
-    dipole_part = y[..., 4:]
+    # Output irreps are "4x0e + 1x1o + 1x2e" — components 4:7 are the dipole,
+    # components 7:12 are the l=2 quadrupole.
+    dipole_part = y[..., 4:7]
     assert dipole_part.abs().sum().item() > 0
+    quad_part = y[..., 7:12]
+    assert quad_part.abs().sum().item() > 0

@@ -15,10 +15,14 @@ training completes, so the standard MACE entry points are unaffected.
 
 - **`EnergyEMLEMACE` model** (`emle_mace.models`) — a MACE variant with additional
   per-atom output heads for valence widths (`s`), core charges (`q_core`), total charges
-  (`q`), and atomic dipoles (`mu`), plus learnable global Thole damping parameter
+  (`q`), atomic dipoles (`mu`, l=1) and atomic quadrupoles (`theta`, l=2 symmetric
+  traceless Cartesian), plus learnable global Thole damping parameter
   (`a_Thole`) and element-wise polarizability volume ratios
   (`elements_alpha_v_ratios`).  Molecular polarizability tensors are derived from these
   quantities via the Thole model for training on reference QM values.
+
+  Because the model now emits an l=2 (quadrupole) output, **`--hidden_irreps` must
+  contain a `2e` term** (e.g. `128x0e + 128x1o + 128x2e`); training will assert this.
 
 - **Loss function** (`emle_mace.loss`) — extends the standard MACE loss with weighted
   RMSE terms for each EMLE property.
@@ -54,18 +58,25 @@ emle-mace-train \
     --error_table EnergyEMLERMSE \
     --train_file train.extxyz \
     --valid_file valid.extxyz \
+    --hidden_irreps "128x0e + 128x1o + 128x2e" \
     --valence_widths_key s \
     --core_charges_key q_core \
     --charges_key q \
     --atomic_dipoles_key mu \
+    --atomic_quadrupoles_key theta \
     --polarizability_key alpha \
     --valence_widths_weight 1000 \
     --core_charges_weight 1000 \
     --charges_weight 10000 \
     --atomic_dipoles_weight 100 \
+    --atomic_quadrupoles_weight 100 \
     --polarizability_weight 0.01 \
     ...  # all standard mace_run_train arguments are accepted
 ```
+
+The quadrupole array referenced by `--atomic_quadrupoles_key` holds the 6 components
+of the symmetric traceless Cartesian quadrupole per atom in the order
+`[xx, xy, xz, yy, yz, zz]`.
 
 Evaluation:
 

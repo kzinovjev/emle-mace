@@ -14,6 +14,7 @@ from emle_mace.loss import (
     mean_squared_error_core_charges,
     mean_squared_error_charges,
     mean_squared_error_atomic_dipoles,
+    mean_squared_error_atomic_quadrupoles,
     mean_squared_error_emle_polarizability,
     weighted_mean_squared_error_interaction_energy,
 )
@@ -35,13 +36,15 @@ def _make_batch():
             "core_charges": np.array([-1.2, 0.6, 0.6]),
             "charges": np.array([-0.8, 0.4, 0.4]),
             "atomic_dipoles": np.zeros((3, 3)),
+            "atomic_quadrupoles": np.zeros((3, 6)),
             "polarizability": np.eye(3) * 5.0,
             "total_charge": 0.0,
         },
         property_weights={
             "energy": 1.0, "forces": 1.0,
             "valence_widths": 1.0, "core_charges": 1.0,
-            "charges": 1.0, "atomic_dipoles": 1.0, "polarizability": 1.0,
+            "charges": 1.0, "atomic_dipoles": 1.0,
+            "atomic_quadrupoles": 1.0, "polarizability": 1.0,
         },
     )
     atom = data.AtomicData.from_config(cfg, z_table=TABLE, cutoff=R_MAX)
@@ -61,6 +64,7 @@ def _make_pred(batch, offset=0.0):
         "core_charges": batch.core_charges + offset,
         "charges": batch.charges + offset,
         "atomic_dipoles": batch.atomic_dipoles + offset,
+        "atomic_quadrupoles": torch.zeros((n, 3, 3), dtype=torch.float64) + offset,
         "a_Thole": torch.tensor(2.0, dtype=torch.float64),
         "alpha_v_ratios": torch.ones(n, dtype=torch.float64) * 0.1,
         "node_attrs": batch.node_attrs,
@@ -83,10 +87,12 @@ def test_loss_zero_on_perfect_pred():
     loss_qc = mean_squared_error_core_charges(batch, pred)
     loss_q = mean_squared_error_charges(batch, pred)
     loss_mu = mean_squared_error_atomic_dipoles(batch, pred)
+    loss_theta = mean_squared_error_atomic_quadrupoles(batch, pred)
 
     for name, val in [("energy", loss_e), ("valence_widths", loss_s),
                       ("core_charges", loss_qc), ("charges", loss_q),
-                      ("atomic_dipoles", loss_mu)]:
+                      ("atomic_dipoles", loss_mu),
+                      ("atomic_quadrupoles", loss_theta)]:
         assert val.item() < 1e-10, f"{name} loss not zero: {val.item()}"
 
 
@@ -124,8 +130,10 @@ def test_loss_repr():
         core_charges_weight=4.0,
         charges_weight=5.0,
         atomic_dipoles_weight=6.0,
+        atomic_quadrupoles_weight=7.0,
         polarizability_weight=20.0,
     )
     s = repr(loss_fn)
     assert "energy_weight=2.000" in s
+    assert "atomic_quadrupoles_weight=7.000" in s
     assert "polarizability_weight=20.000" in s

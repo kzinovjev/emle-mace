@@ -1,12 +1,9 @@
 ###########################################################################################
 # Gate-based non-linear readout block for EnergyEMLEMACE.
 #
-# The default mace.modules.blocks.NonLinearReadoutBlock uses e3nn.nn.Activation, which is
-# scalar-only. When the readout's output contains an l=1 irrep (the atomic dipole), the
-# inner MLP_irreps must remain scalar-only and equivariance silently zeroes every weight
-# that would couple the scalar MLP to the l=1 output. This block uses e3nn.nn.Gate instead,
-# preserving equivariance while keeping a real (non-zero) parameter path to the dipole
-# output.
+# Uses e3nn.nn.Gate (rather than the scalar-only e3nn.nn.Activation of mace's default
+# NonLinearReadoutBlock) so that the equivariant l=1 (dipole) and l=2 (quadrupole) outputs
+# keep a non-zero parameter path through the non-linearity.
 ###########################################################################################
 
 from typing import Any, Callable, Dict, Optional
@@ -24,14 +21,14 @@ from mace.modules.wrapper_ops import (
 
 @compile_mode("script")
 class EMLENonLinearReadoutBlock(torch.nn.Module):
-    """Gate-based non-linear readout for EnergyEMLEMACE (default output: 4x0e + 1x1o)."""
+    """Gate-based non-linear readout for EnergyEMLEMACE (default output: 4x0e + 1x1o + 1x2e)."""
 
     def __init__(
         self,
         irreps_in: o3.Irreps,
         MLP_irreps: o3.Irreps,
         gate: Callable,
-        irreps_out: o3.Irreps = o3.Irreps("4x0e + 1x1o"),
+        irreps_out: o3.Irreps = o3.Irreps("4x0e + 1x1o + 1x2e"),
         cueq_config: Optional[CuEquivarianceConfig] = None,
         oeq_config: Optional[OEQConfig] = None,  # pylint: disable=unused-argument
     ):

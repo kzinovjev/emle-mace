@@ -57,6 +57,8 @@ def create_emle_error_table(
         "rel RMSE q %",
         "RMSE mu [e·Bohr]",
         "rel RMSE mu %",
+        "RMSE theta [e·Bohr²]",
+        "rel RMSE theta %",
         "RMSE alpha [Bohr³]",
         "rel RMSE alpha %",
     ]
@@ -96,6 +98,8 @@ def create_emle_error_table(
                 f"{metrics.get('rel_rmse_emle_q', float('nan')):8.1f}",
                 f"{metrics.get('rmse_emle_mu', float('nan')):8.4f}",
                 f"{metrics.get('rel_rmse_emle_mu', float('nan')):8.1f}",
+                f"{metrics.get('rmse_emle_theta', float('nan')):8.4f}",
+                f"{metrics.get('rel_rmse_emle_theta', float('nan')):8.1f}",
                 f"{metrics.get('rmse_emle_alpha', float('nan')):8.4f}",
                 f"{metrics.get('rel_rmse_emle_alpha', float('nan')):8.1f}",
             ]
@@ -131,6 +135,7 @@ def log_emle_errors(
     error_q_core = eval_metrics.get("rmse_emle_q_core", float("nan"))
     error_q = eval_metrics.get("rmse_emle_q", float("nan"))
     error_mu = eval_metrics.get("rmse_emle_mu", float("nan"))
+    error_theta = eval_metrics.get("rmse_emle_theta", float("nan"))
     error_alpha = eval_metrics.get("rmse_emle_alpha", float("nan"))
 
     logging.info(
@@ -142,5 +147,6 @@ def log_emle_errors(
         f"RMSE_q_core={error_q_core:7.4f} e, "
         f"RMSE_q={error_q:7.4f} e, "
         f"RMSE_mu={error_mu:7.4f} e·Bohr, "
+        f"RMSE_theta={error_theta:7.4f} e·Bohr², "
         f"RMSE_alpha={error_alpha:7.3f} Bohr³"
     )

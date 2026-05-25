@@ -4,10 +4,10 @@ Standard ``mace`` (main branch) does not know about the EMLE per-atom
 properties (valence_widths, core_charges, atomic_dipoles).  When training
 with ``EnergyEMLEMACE`` we need two small additions to the mace data layer:
 
-1. ``update_keyspec_from_kwargs`` — recognise the three EMLE per-atom keys
-   (``valence_widths_key``, ``core_charges_key``, ``atomic_dipoles_key``) as
-   per-atom *arrays* (not per-structure *info*) so they are read from
-   ``atoms.arrays`` when loading an XYZ file.
+1. ``update_keyspec_from_kwargs`` — recognise the EMLE per-atom keys
+   (``valence_widths_key``, ``core_charges_key``, ``atomic_dipoles_key``,
+   ``atomic_quadrupoles_key``) as per-atom *arrays* (not per-structure *info*)
+   so they are read from ``atoms.arrays`` when loading an XYZ file.
 
 2. ``AtomicData.from_config`` — extract the EMLE properties and their per-
    sample loss weights from a ``Configuration`` object and attach them to the
@@ -38,7 +38,12 @@ _patched = False  # guard against double-patching
 def _emle_update_keyspec(keyspec, keydict):
     """Extend mace's keyspec builder to include EMLE per-atom array keys."""
     result = _orig_update_keyspec(keyspec, keydict)
-    emle_array_keys = ["valence_widths_key", "core_charges_key", "atomic_dipoles_key"]
+    emle_array_keys = [
+        "valence_widths_key",
+        "core_charges_key",
+        "atomic_dipoles_key",
+        "atomic_quadrupoles_key",
+    ]
     arrays_keys = {}
     for key in emle_array_keys:
         if key in keydict:
@@ -56,7 +61,12 @@ def make_emle_update_keyspec_from_kwargs(original_fn):
     """
     def _emle_update_keyspec_from_kwargs(keyspec, keydict):
         result = original_fn(keyspec, keydict)
-        emle_array_keys = ["valence_widths_key", "core_charges_key", "atomic_dipoles_key"]
+        emle_array_keys = [
+            "valence_widths_key",
+            "core_charges_key",
+            "atomic_dipoles_key",
+            "atomic_quadrupoles_key",
+        ]
         arrays_keys = {}
         for key in emle_array_keys:
             if key in keydict:
@@ -85,10 +95,12 @@ def _emle_from_config(cls, config, z_table, cutoff, heads=None, **kwargs):
     _dt = torch.get_default_dtype()
 
     # Per-atom EMLE properties (with sensible zero defaults when absent).
+    # atomic_quadrupoles: 6 Cartesian components [xx, xy, xz, yy, yz, zz].
     for name, default_shape in [
         ("valence_widths", (num_atoms,)),
         ("core_charges", (num_atoms,)),
         ("atomic_dipoles", (num_atoms, 3)),
+        ("atomic_quadrupoles", (num_atoms, 6)),
     ]:
         val = config.properties.get(name)
         setattr(
@@ -99,7 +111,7 @@ def _emle_from_config(cls, config, z_table, cutoff, heads=None, **kwargs):
         )
 
     # Per-sample loss weights (default 1.0 when absent).
-    for name in ("valence_widths", "core_charges", "atomic_dipoles"):
+    for name in ("valence_widths", "core_charges", "atomic_dipoles", "atomic_quadrupoles"):
         w = config.property_weights.get(name)
         setattr(
             data,
