@@ -43,7 +43,13 @@ def compute_molecular_polarizabilities(batch: Batch, output: TensorDict):
     r_data = EMLEBase._get_r_data(positions_mol * _ANGSTROM_TO_BOHR, mask)
     s = _flat_to_padded(output["valence_widths"], batch.ptr) * mask
     q_val = _flat_to_padded(output["charges"] - output["core_charges"], batch.ptr) * mask
-    k = _flat_to_padded(output["alpha_v_ratios"], batch.ptr) * mask
+    # Flexible-alpha: multiply the per-element ratio by the per-atom k_alpha
+    # correction. Absent or unity -> exact fixed-alpha result.
+    alpha_v_ratios = output["alpha_v_ratios"]
+    k_alpha = output.get("k_alpha")
+    if k_alpha is not None:
+        alpha_v_ratios = alpha_v_ratios * k_alpha
+    k = _flat_to_padded(alpha_v_ratios, batch.ptr) * mask
 
     A_thole = EMLEBase._get_A_thole(r_data, s, q_val, k, output["a_Thole"])
     return TholeLoss._get_alpha_mol(A_thole, mask)[0]
@@ -197,6 +203,30 @@ def mean_squared_error_emle_polarizability(
     return _reduce_loss(raw_loss, ddp)
 
 
+def mean_squared_error_k_alpha(
+    ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+) -> torch.Tensor:
+    """Regularization keeping the flexible polarizability scaling near unity.
+
+    Mirrors the GPR flexible-model regularization in emle-engine
+    (``emle/train/_loss.py`` ``TholeLoss.forward``), which penalizes the squared
+    departure of the per-reference ``ref_values_sqrtk`` from 1, mean-normalized:
+
+        l2_reg * sum((ref_values_sqrtk - 1)**2 * mask) / sum(n_ref)
+
+    Here the per-atom analogue of ``sqrtk`` is ``k_alpha_sqrt`` (with
+    ``k_alpha = k_alpha_sqrt**2``), so we penalize ``(k_alpha_sqrt - 1)**2`` as an
+    unweighted mean over atoms. This drives ``k_alpha -> 1`` (i.e. alpha back to
+    the fixed MBIS-volume value) unless the polarizability fit demands otherwise.
+    Returns 0 for fixed models (``k_alpha_sqrt`` absent or identically 1).
+    """
+    k_alpha_sqrt = pred.get("k_alpha_sqrt")
+    if k_alpha_sqrt is None:
+        return torch.zeros((), device=ref.weight.device, dtype=ref.weight.dtype)
+    raw_loss = torch.square(k_alpha_sqrt - 1.0)
+    return _reduce_loss(raw_loss, ddp)
+
+
 # ---------------------------------------------------------------------------
 # Loss module
 # ---------------------------------------------------------------------------
@@ -220,6 +250,7 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
         atomic_dipoles_weight: float = 1.0,
         atomic_quadrupoles_weight: float = 1.0,
         polarizability_weight: float = 10.0,
+        k_alpha_reg_weight: float = 0.0,
     ) -> None:
         super().__init__()
         self.register_buffer(
@@ -254,6 +285,10 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
             "polarizability_weight",
             torch.tensor(polarizability_weight, dtype=torch.get_default_dtype()),
         )
+        self.register_buffer(
+            "k_alpha_reg_weight",
+            torch.tensor(k_alpha_reg_weight, dtype=torch.get_default_dtype()),
+        )
 
     def forward(
         self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
@@ -268,6 +303,7 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
         loss_atomic_dipoles = mean_squared_error_atomic_dipoles(ref, pred, ddp)
         loss_atomic_quadrupoles = mean_squared_error_atomic_quadrupoles(ref, pred, ddp)
         loss_polarizability = mean_squared_error_emle_polarizability(ref, pred, ddp)
+        loss_k_alpha = mean_squared_error_k_alpha(ref, pred, ddp)
 
         return (
             self.energy_weight * loss_energy
@@ -278,6 +314,7 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
             + self.atomic_dipoles_weight * loss_atomic_dipoles
             + self.atomic_quadrupoles_weight * loss_atomic_quadrupoles
             + self.polarizability_weight * loss_polarizability
+            + self.k_alpha_reg_weight * loss_k_alpha
         )
 
     def __repr__(self):
@@ -290,5 +327,6 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
             f"charges_weight={self.charges_weight:.3f}, "
             f"atomic_dipoles_weight={self.atomic_dipoles_weight:.3f}, "
             f"atomic_quadrupoles_weight={self.atomic_quadrupoles_weight:.3f}, "
-            f"polarizability_weight={self.polarizability_weight:.3f})"
+            f"polarizability_weight={self.polarizability_weight:.3f}, "
+            f"k_alpha_reg_weight={self.k_alpha_reg_weight:.3f})"
         )

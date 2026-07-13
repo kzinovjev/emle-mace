@@ -78,6 +78,7 @@ def configure_model(args, train_loader, atomic_energies, model_foundation=None,
         atomic_numbers=z_table.zs,
         use_reduced_cg=args.use_reduced_cg,
         use_so3=args.use_so3,
+        use_flexible_alpha=getattr(args, "use_flexible_alpha", False),
         cueq_config=None,
     )
 
@@ -183,6 +184,7 @@ def extract_config_emle_mace_model(model):
         "use_so3": getattr(model, "use_so3", False),
         "use_agnostic_product": getattr(model, "use_agnostic_product", False),
         "use_last_readout_only": getattr(model, "use_last_readout_only", False),
+        "use_flexible_alpha": getattr(model, "use_flexible_alpha", False),
         "use_embedding_readout": hasattr(model, "embedding_readout"),
         "cueq_config": getattr(model, "cueq_config", None),
         "atomic_energies": model.atomic_energies_fn.atomic_energies.cpu().numpy(),

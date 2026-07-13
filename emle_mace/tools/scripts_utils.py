@@ -32,6 +32,7 @@ def get_loss_fn(args, *extra_args, **extra_kwargs):
         atomic_dipoles_weight=getattr(args, "atomic_dipoles_weight", 1.0),
         atomic_quadrupoles_weight=getattr(args, "atomic_quadrupoles_weight", 1.0),
         polarizability_weight=getattr(args, "polarizability_weight", 10.0),
+        k_alpha_reg_weight=getattr(args, "k_alpha_reg_weight", 0.0),
     )
     logging.info(f"Loss function: {loss_fn}")
     return loss_fn
@@ -68,6 +69,7 @@ def get_swa(args, model, optimizer, swas, dipole_only=False):
         atomic_dipoles_weight=getattr(args, "atomic_dipoles_weight", 1.0),
         atomic_quadrupoles_weight=getattr(args, "atomic_quadrupoles_weight", 1.0),
         polarizability_weight=getattr(args, "polarizability_weight", 10.0),
+        k_alpha_reg_weight=getattr(args, "k_alpha_reg_weight", 0.0),
     )
     logging.info(
         f"Stage Two (after {args.start_swa} epochs): {loss_fn_energy}, "

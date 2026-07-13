@@ -115,4 +115,20 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
             default=10.0,
         )
 
+    # ---------------------------------------- flexible polarizability (k_alpha)
+    parser.add_argument(
+        "--use_flexible_alpha",
+        help="predict a per-atom, environment-dependent polarizability "
+        "correction k_alpha (decouples alpha from the valence width s)",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--k_alpha_reg_weight",
+        help="weight of the (sqrt(k_alpha) - 1)^2 regularization keeping the "
+        "flexible polarizability correction near unity; 0.0 disables it",
+        type=float,
+        default=0.0,
+    )
+
     return parser
