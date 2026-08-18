@@ -43,6 +43,15 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
                 action.choices.append("energy_emle")
             break
 
+    # ------------------------------------------------------- warm start
+    parser.add_argument(
+        "--init_model_path",
+        help="Warm start: initialise weights from this trained model; cap buffers "
+        "keep the values computed for the current run.",
+        type=str,
+        default=None,
+    )
+
     # ------------------------------------------------ EMLE data-key arguments
     parser.add_argument(
         "--valence_widths_key",

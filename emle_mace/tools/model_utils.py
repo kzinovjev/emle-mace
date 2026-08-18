@@ -114,6 +114,26 @@ def configure_model(args, train_loader, atomic_energies, model_foundation=None,
         f"{args.num_radial_basis} radial basis, {args.num_cutoff_basis} cutoff basis"
     )
 
+    init_path = getattr(args, "init_model_path", None)
+    if init_path:
+        import torch
+        src = torch.load(init_path, map_location="cpu", weights_only=False)
+        src_sd = src.state_dict() if hasattr(src, "state_dict") else src
+        new_sd = model.state_dict()
+        assert set(src_sd) == set(new_sd), (
+            "init_model_path state_dict key mismatch: "
+            f"only-src {sorted(set(src_sd) - set(new_sd))[:5]} "
+            f"only-new {sorted(set(new_sd) - set(src_sd))[:5]}"
+        )
+        kept = [k for k in new_sd if "_cap" in k or "q_core_fixed" in k]
+        for k in kept:
+            src_sd[k] = new_sd[k]
+        model.load_state_dict(src_sd, strict=True)
+        logging.info(
+            f"Warm start: weights loaded from {init_path}; "
+            f"dataset-derived buffers kept from current config: {kept}"
+        )
+
     return model, output_args
 
 

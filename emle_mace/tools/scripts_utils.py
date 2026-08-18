@@ -50,6 +50,12 @@ def get_swa(args, model, optimizer, swas, dipole_only=False):
 
     assert not dipole_only, "Stage Two for dipole fitting not implemented"
     swas.append(True)
+    if args.start_swa == 0:
+        # True SWA-only run (e.g. warm start): no stage-one epochs ever run, so no
+        # stage-one checkpoint exists -- drop the stage-one entry from the
+        # final-evaluation list or load_latest(swa=False) fails on an empty set.
+        while False in swas:
+            swas.remove(False)
     if args.start_swa is None:
         args.start_swa = max(1, args.max_num_epochs // 4 * 3)
     else:
