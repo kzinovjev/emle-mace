@@ -139,5 +139,18 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=None,
     )
+    parser.add_argument(
+        "--k_alpha_cap_lo",
+        help="Lower bound on k_alpha; used with --k_alpha_cap_hi as a two-sided bound.",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--k_alpha_cap_hi",
+        help="Smooth upper bound on k_alpha (must be > 1); k_alpha == 1 at zero "
+        "readout. 0.0 (default) disables the cap.",
+        type=float,
+        default=0.0,
+    )
 
     return parser

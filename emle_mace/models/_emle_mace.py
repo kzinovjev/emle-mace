@@ -87,6 +87,8 @@ class EnergyEMLEMACE(torch.nn.Module):
         use_embedding_readout: bool = False,
         use_quadrupoles: bool = True,
         use_flexible_alpha: bool = False,
+        k_alpha_cap_lo: float = 0.0,
+        k_alpha_cap_hi: float = 0.0,
         q_core_fixed: Optional[List[float]] = None,
         distance_transform: str = "None",
         edge_irreps: Optional[o3.Irreps] = None,
@@ -126,6 +128,30 @@ class EnergyEMLEMACE(torch.nn.Module):
         # polarizability ratio can vary per environment instead of being fixed
         # per element. See DESIGN.md / analysis/flexpol.
         self.use_flexible_alpha = use_flexible_alpha
+        # Optional smooth two-sided bound on k_alpha: lo <= k_alpha <= hi, with
+        #     k_alpha = lo + (hi-lo)*sigmoid(a*z + z0)
+        # z0 chosen so k_alpha == 1 at zero readout (the value the
+        # (sqrt(k_alpha)-1)^2 regularizer pulls toward), and a chosen for UNIT
+        # GRADIENT there, so in-range behaviour is natural and both bounds are
+        # unreachable asymptotes. hi = 0.0 (default) disables the cap, exact
+        # backward compatibility; lo = 0 gives a one-sided upper bound.
+        self.k_alpha_cap_lo = float(k_alpha_cap_lo)
+        self.k_alpha_cap_hi = float(k_alpha_cap_hi)
+        _z0 = 0.0
+        _a = 1.0
+        if self.k_alpha_cap_hi > 0.0:
+            if self.k_alpha_cap_hi <= 1.0:
+                raise ValueError("k_alpha_cap_hi must be > 1 (k_alpha=1 must be attainable)")
+            if not (0.0 <= self.k_alpha_cap_lo < 1.0):
+                raise ValueError("k_alpha_cap_lo must satisfy 0 <= lo < 1")
+            import math as _math
+            _w = self.k_alpha_cap_hi - self.k_alpha_cap_lo
+            _p = (1.0 - self.k_alpha_cap_lo) / _w          # sigmoid value giving k_alpha=1
+            _z0 = _math.log(_p / (1.0 - _p))
+            _a = 1.0 / (_w * _p * (1.0 - _p))              # unit gradient at k_alpha=1
+        self.k_alpha_cap_z0 = _z0
+        self.k_alpha_cap_a = _a
+
         # q_core as a per-element CONSTANT (dataset mean), as in the reference GPR
         # EMLE model (Zinovjev 2023, Table 1: "average MBIS values over training
         # set"). MBIS core charges are essentially element-determined -- natural
@@ -558,20 +584,36 @@ class EnergyEMLEMACE(torch.nn.Module):
         # Per-atom polarizability correction k_alpha (flexible mode). This mirrors
         # the GPR flexible model (emle alpha_mode="reference"), which predicts a
         # per-atom sqrt(k) and squares it for positivity, regularizing sqrt(k)->1.
-        # Here the readout predicts the per-atom deviation of sqrt(k_alpha) from 1
-        # (summed over layers), so:
+        #
+        # UNCAPPED (k_alpha_cap_hi == 0, default): the readout predicts the per-atom
+        # deviation of sqrt(k_alpha) from 1 (summed over layers), so:
         #   k_alpha_sqrt = 1 + sum_layers(dev)      (== 1 when readout output is 0)
         #   k_alpha      = k_alpha_sqrt**2 > 0       (== 1 -> recovers fixed alpha)
+        #
+        # CAPPED (k_alpha_cap_hi > 1): the readout sum z is mapped logistically onto
+        # (lo, hi), and k_alpha_sqrt is derived FROM the capped k_alpha:
+        #   k_alpha      = lo + (hi-lo) * sigmoid(a*z + z0)          (==1 at z=0)
+        #   k_alpha_sqrt = sqrt(k_alpha)
+        # Deriving k_alpha_sqrt from the capped value is deliberate: the
+        # (k_alpha_sqrt - 1)^2 regularization must act on the POST-cap k_alpha,
+        # not on the raw readout, so that the penalty always refers to the value
+        # the induction model actually uses.
         # The multiplicative correction acts on the volume-based ratio
         # (alpha_v_ratios) so atomic alpha stays proportional to the MBIS volume.
         # Fixed mode: k_alpha = k_alpha_sqrt = 1 for every atom (exact backward
         # compatibility). k_alpha_sqrt is exposed so the loss can regularize it
         # toward 1 exactly as the GPR training regularizes ref_values_sqrtk.
         if self.use_flexible_alpha:
-            k_alpha_sqrt = 1.0 + torch.sum(
-                torch.stack(node_k_alpha_sqrt_dev_list, dim=-1), dim=-1
-            )  # [n_nodes]
-            k_alpha = k_alpha_sqrt**2
+            _z = torch.sum(torch.stack(node_k_alpha_sqrt_dev_list, dim=-1), dim=-1)
+            if self.k_alpha_cap_hi > 0.0:
+                # Smooth logistic saturation onto (lo, hi); k_alpha == 1 at _z == 0.
+                k_alpha = self.k_alpha_cap_lo + (
+                    self.k_alpha_cap_hi - self.k_alpha_cap_lo
+                ) * torch.sigmoid(self.k_alpha_cap_a * _z + self.k_alpha_cap_z0)
+                k_alpha_sqrt = torch.sqrt(k_alpha)
+            else:
+                k_alpha_sqrt = 1.0 + _z  # [n_nodes]
+                k_alpha = k_alpha_sqrt**2
         else:
             k_alpha_sqrt = torch.ones_like(valence_widths)
             k_alpha = torch.ones_like(valence_widths)
