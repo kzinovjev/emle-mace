@@ -124,6 +124,16 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
             default=10.0,
         )
 
+    parser.add_argument(
+        "--max_static_L",
+        help="Highest static multipole order predicted: 0 = charges only, "
+        "1 = +dipoles, 2 = +quadrupoles. The hidden irreps must reach the "
+        "same order (max_L >= max_static_L).",
+        type=int,
+        choices=[0, 1, 2],
+        default=0,
+    )
+
     # ---------------------------------------- flexible polarizability (k_alpha)
     parser.add_argument(
         "--use_flexible_alpha",

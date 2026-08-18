@@ -35,11 +35,12 @@ from mace.modules.utils import (
 
 from ._readouts import EMLENonLinearReadoutBlock
 
-# Per-readout output irreps are built per-instance from the use_quadrupoles /
-# use_flexible_alpha flags (see __init__): base 4 scalars (energy, valence_widths,
+# Per-readout output irreps are built per-instance from the max_static_L /
+# use_flexible_alpha settings (see __init__): base 4 scalars (energy, valence_widths,
 # core_charges, charges), an optional 5th scalar (sqrt(k_alpha) deviation, flexible
-# polarizability), an l=1 odd vector (atomic dipole) and an optional l=2 even tensor
-# (atomic quadrupole, traceless symmetric Cartesian in the e3nn 2e basis).
+# polarizability), an l=1 odd vector (atomic dipole, max_static_L >= 1) and an l=2
+# even tensor (atomic quadrupole, traceless symmetric Cartesian in the e3nn 2e
+# basis, max_static_L == 2).
 
 
 @compile_mode("script")
@@ -50,8 +51,9 @@ class EnergyEMLEMACE(torch.nn.Module):
       - valence_widths      (s)
       - core_charges        (q_core)
       - charges             (q, total = core + valence)
-      - atomic_dipoles      (mu, l=1)
-      - atomic_quadrupoles  (theta, l=2 traceless symmetric Cartesian 3x3)
+      - atomic_dipoles      (mu, l=1; only when max_static_L >= 1)
+      - atomic_quadrupoles  (theta, l=2 traceless symmetric Cartesian 3x3;
+                             only when max_static_L == 2)
 
     and global per-graph:
       - a_Thole         (learnable Thole damping parameter)
@@ -85,7 +87,7 @@ class EnergyEMLEMACE(torch.nn.Module):
         use_agnostic_product: bool = False,
         use_last_readout_only: bool = False,
         use_embedding_readout: bool = False,
-        use_quadrupoles: bool = True,
+        max_static_L: int = 0,
         use_flexible_alpha: bool = False,
         k_alpha_cap_lo: float = 0.0,
         k_alpha_cap_hi: float = 0.0,
@@ -204,7 +206,11 @@ class EnergyEMLEMACE(torch.nn.Module):
         self.register_buffer("q_core_cap_hi", _capbuf(q_core_cap_hi, "q_core_cap_hi"))
         self.register_buffer("s_cap_lo", _capbuf(s_cap_lo, "s_cap_lo"))
         self.register_buffer("s_cap_hi", _capbuf(s_cap_hi, "s_cap_hi"))
-        self.use_quadrupoles = use_quadrupoles
+        # Highest static multipole order: 0 = charges only, 1 = +dipoles,
+        # 2 = +quadrupoles.
+        if max_static_L not in (0, 1, 2):
+            raise ValueError("max_static_L must be 0 (q), 1 (q+mu) or 2 (q+mu+theta)")
+        self.max_static_L = int(max_static_L)
         # q_core as a per-element CONSTANT (reference GPR EMLE, Zinovjev 2023 Table 1:
         # "average MBIS values over training set"). When enabled the q_core READOUT
         # HEAD IS REMOVED ENTIRELY -- MBIS core charges are element-determined
@@ -229,10 +235,12 @@ class EnergyEMLEMACE(torch.nn.Module):
         if use_flexible_alpha:
             self._col_k_alpha = _i
             _i += 1
-        self._col_mu = n_emle_scalars
-        self._col_theta = n_emle_scalars + 3
-        _irreps_str = f"{n_emle_scalars}x0e + 1x1o"
-        if use_quadrupoles:
+        self._col_mu = n_emle_scalars if self.max_static_L >= 1 else -1
+        self._col_theta = n_emle_scalars + 3 if self.max_static_L >= 2 else -1
+        _irreps_str = f"{n_emle_scalars}x0e"
+        if self.max_static_L >= 1:
+            _irreps_str += " + 1x1o"
+        if self.max_static_L >= 2:
             _irreps_str += " + 1x2e"
         self._emle_readout_irreps = o3.Irreps(_irreps_str)
 
@@ -344,16 +352,16 @@ class EnergyEMLEMACE(torch.nn.Module):
 
         for i in range(num_interactions - 1):
             if i == num_interactions - 2:
-                assert any(
-                    ir.l == 1 for _, ir in hidden_irreps
-                ), "To predict dipoles use at least l=1 hidden_irreps"
-                max_readout_l = 1
-                if self.use_quadrupoles:
+                max_readout_l = self.max_static_L
+                if max_readout_l >= 1:
+                    assert any(
+                        ir.l == 1 for _, ir in hidden_irreps
+                    ), "To predict dipoles use at least l=1 hidden_irreps"
+                if max_readout_l >= 2:
                     assert any(
                         ir.l == 2 for _, ir in hidden_irreps
                     ), "To predict quadrupoles, hidden_irreps must contain an l=2 (2e) irrep"
-                    max_readout_l = 2
-                # Last layer feeds the dipole (l=1) and, if enabled, quadrupole (l=2) readout.
+                # Last layer feeds the multipole readouts up to max_static_L.
                 hidden_irreps_out = str(
                     o3.Irreps(
                         [(mul, ir) for mul, ir in hidden_irreps if ir.l <= max_readout_l]
@@ -566,10 +574,11 @@ class EnergyEMLEMACE(torch.nn.Module):
                 node_k_alpha_sqrt_dev_list.append(
                     node_out[num_atoms_arange, self._col_k_alpha]
                 )
-            node_atomic_dipoles_list.append(
-                node_out[num_atoms_arange, self._col_mu : self._col_mu + 3]
-            )
-            if self.use_quadrupoles:
+            if self._col_mu >= 0:
+                node_atomic_dipoles_list.append(
+                    node_out[num_atoms_arange, self._col_mu : self._col_mu + 3]
+                )
+            if self._col_theta >= 0:
                 node_atomic_quadrupoles_list.append(
                     node_out[num_atoms_arange, self._col_theta : self._col_theta + 5]
                 )
@@ -582,9 +591,6 @@ class EnergyEMLEMACE(torch.nn.Module):
 
         contributions_valence_widths = torch.stack(node_valence_widths_list, dim=-1)
         contributions_charges = torch.stack(node_charges_list, dim=-1)
-        contributions_atomic_dipoles = torch.stack(
-            node_atomic_dipoles_list, dim=-1
-        )  # [n_nodes, 3, n_contributions]
         valence_widths = torch.sum(contributions_valence_widths, dim=-1)  # [n_nodes]
         if self.use_fixed_q_core:
             # Element-determined constant; no readout head exists for it.
@@ -627,25 +633,23 @@ class EnergyEMLEMACE(torch.nn.Module):
         ) - (data["total_charge"] / num_atoms)
         charges = charges - total_charge_excess[data["batch"]]
 
-        atomic_dipoles = torch.sum(contributions_atomic_dipoles, dim=-1)  # [n_nodes, 3]
+        # Static multipoles above max_static_L have no heads -> None in the output.
+        atomic_dipoles: Optional[torch.Tensor] = None
+        if self.max_static_L >= 1:
+            atomic_dipoles = torch.sum(
+                torch.stack(node_atomic_dipoles_list, dim=-1), dim=-1
+            )  # [n_nodes, 3]
 
         # Sum the l=2 contributions, then map the 5 e3nn 2e components to a
         # symmetric traceless 3x3 Cartesian quadrupole via the fixed change-of-basis.
-        # When quadrupoles are disabled, emit a zero tensor of the right shape.
-        if self.use_quadrupoles:
-            contributions_atomic_quadrupoles = torch.stack(
-                node_atomic_quadrupoles_list, dim=-1
-            )  # [n_nodes, 5, n_contributions]
+        atomic_quadrupoles: Optional[torch.Tensor] = None
+        if self.max_static_L >= 2:
             atomic_quadrupoles_2e = torch.sum(
-                contributions_atomic_quadrupoles, dim=-1
+                torch.stack(node_atomic_quadrupoles_list, dim=-1), dim=-1
             )  # [n_nodes, 5]
             atomic_quadrupoles = torch.einsum(
                 "kij,nk->nij", self.quad_to_cartesian, atomic_quadrupoles_2e
             )  # [n_nodes, 3, 3]
-        else:
-            atomic_quadrupoles = torch.zeros(
-                charges.shape[0], 3, 3, dtype=charges.dtype, device=charges.device
-            )
 
         # Per-atom polarizability correction k_alpha (flexible mode). This mirrors
         # the GPR flexible model (emle alpha_mode="reference"), which predicts a

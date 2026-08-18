@@ -300,8 +300,18 @@ class WeightedEnergyForcesEMLELoss(torch.nn.Module):
         loss_valence_widths = mean_squared_error_valence_widths(ref, pred, ddp)
         loss_core_charges = mean_squared_error_core_charges(ref, pred, ddp)
         loss_charges = mean_squared_error_charges(ref, pred, ddp)
-        loss_atomic_dipoles = mean_squared_error_atomic_dipoles(ref, pred, ddp)
-        loss_atomic_quadrupoles = mean_squared_error_atomic_quadrupoles(ref, pred, ddp)
+        # Multipole heads above the model's max_static_L are absent (None).
+        _zero = torch.zeros_like(loss_energy)
+        loss_atomic_dipoles = (
+            mean_squared_error_atomic_dipoles(ref, pred, ddp)
+            if pred.get("atomic_dipoles") is not None
+            else _zero
+        )
+        loss_atomic_quadrupoles = (
+            mean_squared_error_atomic_quadrupoles(ref, pred, ddp)
+            if pred.get("atomic_quadrupoles") is not None
+            else _zero
+        )
         loss_polarizability = mean_squared_error_emle_polarizability(ref, pred, ddp)
         loss_k_alpha = mean_squared_error_k_alpha(ref, pred, ddp)
 
