@@ -131,6 +131,17 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
     )
 
+    for _p, _u in (("q", "e"), ("q_core", "e"), ("s", "Bohr")):
+        for _b in ("lo", "hi"):
+            parser.add_argument(
+                f"--{_p}_cap_{_b}",
+                help=f"Per-element {_b} bound for the {_p} head ({_u}), ordered by the "
+                "z_table. Omit a property's lo/hi pair to leave that head uncapped.",
+                type=float,
+                nargs="+",
+                default=None,
+            )
+
     parser.add_argument(
         "--q_core_fixed",
         help="Per-element constant core charges (dataset means), ordered by z_table. "

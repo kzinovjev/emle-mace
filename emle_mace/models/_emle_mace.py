@@ -89,6 +89,12 @@ class EnergyEMLEMACE(torch.nn.Module):
         use_flexible_alpha: bool = False,
         k_alpha_cap_lo: float = 0.0,
         k_alpha_cap_hi: float = 0.0,
+        q_cap_lo: Optional[List[float]] = None,
+        q_cap_hi: Optional[List[float]] = None,
+        q_core_cap_lo: Optional[List[float]] = None,
+        q_core_cap_hi: Optional[List[float]] = None,
+        s_cap_lo: Optional[List[float]] = None,
+        s_cap_hi: Optional[List[float]] = None,
         q_core_fixed: Optional[List[float]] = None,
         distance_transform: str = "None",
         edge_irreps: Optional[o3.Irreps] = None,
@@ -152,6 +158,23 @@ class EnergyEMLEMACE(torch.nn.Module):
         self.k_alpha_cap_z0 = _z0
         self.k_alpha_cap_a = _a
 
+        # Per-element physical caps on the MBIS property heads (q, q_core, s).
+        # Bounds are [dataset_min - margin, dataset_max + margin] per element, so
+        # the heads are bounded BY CONSTRUCTION and a runaway is impossible.
+        # Mapping (per atom, with lo/hi gathered from node_attrs):
+        #     x = lo + (hi-lo) * sigmoid(4*(x_raw - mid)/(hi-lo)),  mid=(lo+hi)/2
+        # which has UNIT GRADIENT at the midpoint, so in-range behaviour matches
+        # the uncapped head and saturation is smooth (C-infinity) at the bounds.
+        # Applied to the raw head outputs BEFORE the total-charge correction; the
+        # correction subtracts a per-molecule constant built from capped values,
+        # so the composition stays bounded.
+        _ne = num_elements
+        def _capbuf(v, name):
+            if v is None:
+                return torch.zeros(0)
+            t = torch.tensor(v, dtype=torch.get_default_dtype())
+            assert t.numel() == _ne, f"{name} must have one entry per element ({_ne})"
+            return t
         # q_core as a per-element CONSTANT (dataset mean), as in the reference GPR
         # EMLE model (Zinovjev 2023, Table 1: "average MBIS values over training
         # set"). MBIS core charges are essentially element-determined -- natural
@@ -163,6 +186,24 @@ class EnergyEMLEMACE(torch.nn.Module):
             if q_core_fixed is not None
             else torch.zeros(0),
         )
+        # Each property cap is INDEPENDENT: pass lo+hi to enable, omit both to
+        # disable that property's cap.
+        for _nm, _l, _h in (
+            ("q_cap", q_cap_lo, q_cap_hi),
+            ("q_core_cap", q_core_cap_lo, q_core_cap_hi),
+            ("s_cap", s_cap_lo, s_cap_hi),
+        ):
+            if (_l is None) != (_h is None):
+                raise ValueError(f"{_nm}_lo and {_nm}_hi must be given together")
+        self.use_q_cap = q_cap_lo is not None
+        self.use_q_core_cap = q_core_cap_lo is not None
+        self.use_s_cap = s_cap_lo is not None
+        self.register_buffer("q_cap_lo", _capbuf(q_cap_lo, "q_cap_lo"))
+        self.register_buffer("q_cap_hi", _capbuf(q_cap_hi, "q_cap_hi"))
+        self.register_buffer("q_core_cap_lo", _capbuf(q_core_cap_lo, "q_core_cap_lo"))
+        self.register_buffer("q_core_cap_hi", _capbuf(q_core_cap_hi, "q_core_cap_hi"))
+        self.register_buffer("s_cap_lo", _capbuf(s_cap_lo, "s_cap_lo"))
+        self.register_buffer("s_cap_hi", _capbuf(s_cap_hi, "s_cap_hi"))
         self.use_quadrupoles = use_quadrupoles
         # q_core as a per-element CONSTANT (reference GPR EMLE, Zinovjev 2023 Table 1:
         # "average MBIS values over training set"). When enabled the q_core READOUT
@@ -553,6 +594,31 @@ class EnergyEMLEMACE(torch.nn.Module):
                 torch.stack(node_core_charges_list, dim=-1), dim=-1
             )  # [n_nodes]
         charges = torch.sum(contributions_charges, dim=-1)  # [n_nodes]
+
+        # Physical per-element caps on the property heads (see __init__); each
+        # property's cap is applied independently, iff its lo/hi were provided.
+        # NOTE: the raw head output is ~0 for an untrained model, so the
+        # sigmoid argument must NOT subtract the physical midpoint -- doing so
+        # pins s (mid~0.39) and q_core (mid~6.4) at their lower bound with a
+        # vanishing gradient, and they never learn. Mapping raw=0 -> midpoint
+        # (unit gradient there) makes the head predict a DEVIATION from the
+        # middle of the allowed band, which trains normally.
+        na = data["node_attrs"]
+        if self.use_s_cap:
+            _lo = na @ self.s_cap_lo
+            _hi = na @ self.s_cap_hi
+            _w = _hi - _lo
+            valence_widths = _lo + _w * torch.sigmoid(4.0 * valence_widths / _w)
+        if self.use_q_core_cap and not self.use_fixed_q_core:
+            _lo = na @ self.q_core_cap_lo
+            _hi = na @ self.q_core_cap_hi
+            _w = _hi - _lo
+            core_charges = _lo + _w * torch.sigmoid(4.0 * core_charges / _w)
+        if self.use_q_cap:
+            _lo = na @ self.q_cap_lo
+            _hi = na @ self.q_cap_hi
+            _w = _hi - _lo
+            charges = _lo + _w * torch.sigmoid(4.0 * charges / _w)
 
         # Correct total charge per graph to match the target total charge
         num_atoms = (data["ptr"][1:] - data["ptr"][:-1]).to(charges)

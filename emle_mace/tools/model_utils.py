@@ -81,6 +81,12 @@ def configure_model(args, train_loader, atomic_energies, model_foundation=None,
         use_flexible_alpha=getattr(args, "use_flexible_alpha", False),
         k_alpha_cap_lo=getattr(args, "k_alpha_cap_lo", 0.0),
         k_alpha_cap_hi=getattr(args, "k_alpha_cap_hi", 0.0),
+        q_cap_lo=getattr(args, "q_cap_lo", None),
+        q_cap_hi=getattr(args, "q_cap_hi", None),
+        q_core_cap_lo=getattr(args, "q_core_cap_lo", None),
+        q_core_cap_hi=getattr(args, "q_core_cap_hi", None),
+        s_cap_lo=getattr(args, "s_cap_lo", None),
+        s_cap_hi=getattr(args, "s_cap_hi", None),
         q_core_fixed=getattr(args, "q_core_fixed", None),
         cueq_config=None,
     )
@@ -190,6 +196,12 @@ def extract_config_emle_mace_model(model):
         "use_flexible_alpha": getattr(model, "use_flexible_alpha", False),
         "k_alpha_cap_lo": getattr(model, "k_alpha_cap_lo", 0.0),
         "k_alpha_cap_hi": getattr(model, "k_alpha_cap_hi", 0.0),
+        "use_property_caps": bool(
+            getattr(model, "use_q_cap", False)
+            or getattr(model, "use_q_core_cap", False)
+            or getattr(model, "use_s_cap", False)
+            or getattr(model, "use_property_caps", False)
+        ),
         "use_embedding_readout": hasattr(model, "embedding_readout"),
         "cueq_config": getattr(model, "cueq_config", None),
         "atomic_energies": model.atomic_energies_fn.atomic_energies.cpu().numpy(),
