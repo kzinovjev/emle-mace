@@ -79,6 +79,7 @@ def configure_model(args, train_loader, atomic_energies, model_foundation=None,
         use_reduced_cg=args.use_reduced_cg,
         use_so3=args.use_so3,
         use_flexible_alpha=getattr(args, "use_flexible_alpha", False),
+        q_core_fixed=getattr(args, "q_core_fixed", None),
         cueq_config=None,
     )
 

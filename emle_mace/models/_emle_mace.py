@@ -87,6 +87,7 @@ class EnergyEMLEMACE(torch.nn.Module):
         use_embedding_readout: bool = False,
         use_quadrupoles: bool = True,
         use_flexible_alpha: bool = False,
+        q_core_fixed: Optional[List[float]] = None,
         distance_transform: str = "None",
         edge_irreps: Optional[o3.Irreps] = None,
         radial_MLP: Optional[List[int]] = None,
@@ -125,8 +126,44 @@ class EnergyEMLEMACE(torch.nn.Module):
         # polarizability ratio can vary per environment instead of being fixed
         # per element. See DESIGN.md / analysis/flexpol.
         self.use_flexible_alpha = use_flexible_alpha
+        # q_core as a per-element CONSTANT (dataset mean), as in the reference GPR
+        # EMLE model (Zinovjev 2023, Table 1: "average MBIS values over training
+        # set"). MBIS core charges are essentially element-determined -- natural
+        # spread is std ~0.006-0.009 e (H exactly 1.0) -- so a learned head adds a
+        # large extrapolation error (up to 0.8 e off-manifold) for no benefit.
+        self.register_buffer(
+            "q_core_fixed",
+            torch.tensor(q_core_fixed, dtype=torch.get_default_dtype())
+            if q_core_fixed is not None
+            else torch.zeros(0),
+        )
         self.use_quadrupoles = use_quadrupoles
-        n_emle_scalars = 5 if use_flexible_alpha else 4
+        # q_core as a per-element CONSTANT (reference GPR EMLE, Zinovjev 2023 Table 1:
+        # "average MBIS values over training set"). When enabled the q_core READOUT
+        # HEAD IS REMOVED ENTIRELY -- MBIS core charges are element-determined
+        # (std ~0.006 e; H exactly 1.0), so a learned head only adds extrapolation
+        # error (up to 0.8 e off-manifold). Set core_charges_weight=0 to match.
+        self.use_fixed_q_core = q_core_fixed is not None
+        # Scalar readout layout: energy, valence_widths, [q_core], charges, [k_alpha]
+        n_emle_scalars = 3
+        if not self.use_fixed_q_core:
+            n_emle_scalars += 1
+        if use_flexible_alpha:
+            n_emle_scalars += 1
+        # Column indices (-1 = head absent), precomputed for TorchScript.
+        _i = 2
+        self._col_q_core = -1
+        if not self.use_fixed_q_core:
+            self._col_q_core = _i
+            _i += 1
+        self._col_charges = _i
+        _i += 1
+        self._col_k_alpha = -1
+        if use_flexible_alpha:
+            self._col_k_alpha = _i
+            _i += 1
+        self._col_mu = n_emle_scalars
+        self._col_theta = n_emle_scalars + 3
         _irreps_str = f"{n_emle_scalars}x0e + 1x1o"
         if use_quadrupoles:
             _irreps_str += " + 1x2e"
@@ -449,27 +486,26 @@ class EnergyEMLEMACE(torch.nn.Module):
             energies.append(energy)
             node_energies_list.append(node_es)
 
+            # Column layout: 0 energy, 1 valence_widths, [q_core], charges, [k_alpha],
+            # then 3 dipole (1x1o), then 5 quadrupole (1x2e). q_core is absent when it
+            # is a fixed per-element constant. Indices precomputed in __init__.
             node_valence_widths_list.append(node_out[num_atoms_arange, 1])
-            node_core_charges_list.append(node_out[num_atoms_arange, 2])
-            node_charges_list.append(node_out[num_atoms_arange, 3])
-            # Readout column layout:
-            #   0:4  -> energy, valence_widths, core_charges, charges
-            #   [4]  -> sqrt(k_alpha) deviation from 1 (only if use_flexible_alpha)
-            #   next 3 -> atomic dipole (1x1o)
-            #   next 5 -> atomic quadrupole (1x2e, only if use_quadrupoles)
-            if self.use_flexible_alpha:
-                node_k_alpha_sqrt_dev_list.append(node_out[num_atoms_arange, 4])
-                node_atomic_dipoles_list.append(node_out[num_atoms_arange, 5:8])
-                if self.use_quadrupoles:
-                    node_atomic_quadrupoles_list.append(
-                        node_out[num_atoms_arange, 8:13]
-                    )
-            else:
-                node_atomic_dipoles_list.append(node_out[num_atoms_arange, 4:7])
-                if self.use_quadrupoles:
-                    node_atomic_quadrupoles_list.append(
-                        node_out[num_atoms_arange, 7:12]
-                    )
+            if self._col_q_core >= 0:
+                node_core_charges_list.append(
+                    node_out[num_atoms_arange, self._col_q_core]
+                )
+            node_charges_list.append(node_out[num_atoms_arange, self._col_charges])
+            if self._col_k_alpha >= 0:
+                node_k_alpha_sqrt_dev_list.append(
+                    node_out[num_atoms_arange, self._col_k_alpha]
+                )
+            node_atomic_dipoles_list.append(
+                node_out[num_atoms_arange, self._col_mu : self._col_mu + 3]
+            )
+            if self.use_quadrupoles:
+                node_atomic_quadrupoles_list.append(
+                    node_out[num_atoms_arange, self._col_theta : self._col_theta + 5]
+                )
 
         contributions = torch.stack(energies, dim=-1)
         interaction_energy = torch.sum(contributions[:, 1:], dim=-1)
@@ -478,13 +514,18 @@ class EnergyEMLEMACE(torch.nn.Module):
         node_feats_out = torch.cat(node_feats_concat, dim=-1)
 
         contributions_valence_widths = torch.stack(node_valence_widths_list, dim=-1)
-        contributions_core_charges = torch.stack(node_core_charges_list, dim=-1)
         contributions_charges = torch.stack(node_charges_list, dim=-1)
         contributions_atomic_dipoles = torch.stack(
             node_atomic_dipoles_list, dim=-1
         )  # [n_nodes, 3, n_contributions]
         valence_widths = torch.sum(contributions_valence_widths, dim=-1)  # [n_nodes]
-        core_charges = torch.sum(contributions_core_charges, dim=-1)  # [n_nodes]
+        if self.use_fixed_q_core:
+            # Element-determined constant; no readout head exists for it.
+            core_charges = data["node_attrs"] @ self.q_core_fixed
+        else:
+            core_charges = torch.sum(
+                torch.stack(node_core_charges_list, dim=-1), dim=-1
+            )  # [n_nodes]
         charges = torch.sum(contributions_charges, dim=-1)  # [n_nodes]
 
         # Correct total charge per graph to match the target total charge

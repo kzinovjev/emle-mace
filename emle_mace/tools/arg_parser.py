@@ -131,4 +131,13 @@ def build_emle_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
     )
 
+    parser.add_argument(
+        "--q_core_fixed",
+        help="Per-element constant core charges (dataset means), ordered by z_table. "
+        "Removes the q_core readout head; set core_charges_weight=0 with this.",
+        type=float,
+        nargs="+",
+        default=None,
+    )
+
     return parser
